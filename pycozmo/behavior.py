@@ -1146,8 +1146,8 @@ def get_behavior_class_from_dict(data):
         "PlayAnimWithFace": BehaviorPlayAnimWithFace,
     }
     # The behavior families build on this module, so they join the map here.
-    from . import cube_behaviors, explore_behaviors, face_behaviors, feeding_behaviors
-    from . import game_behaviors, song_behaviors
+    from . import cube_behaviors, dev_behaviors, explore_behaviors, face_behaviors
+    from . import feeding_behaviors, game_behaviors, interactive_behaviors, song_behaviors
     class_map.update({
         "Singing": song_behaviors.BehaviorSinging,
         "Dance": song_behaviors.BehaviorDance,
@@ -1181,6 +1181,15 @@ def get_behavior_class_from_dict(data):
         "TrackLaser": explore_behaviors.BehaviorTrackLaser,
         "FeedingEat": feeding_behaviors.BehaviorFeedingEat,
         "FeedingSearchForCube": feeding_behaviors.BehaviorFeedingSearchForCube,
+        "Bouncer": interactive_behaviors.BehaviorBouncer,
+        "GuardDog": interactive_behaviors.BehaviorGuardDog,
+        "FireTruckAlarm": interactive_behaviors.BehaviorFireTruckAlarm,
+        "OnboardingShowCube": interactive_behaviors.BehaviorOnboardingShowCube,
+        "DevTurnInPlaceTest": dev_behaviors.BehaviorDevTurnInPlaceTest,
+        "DockingTestSimple": dev_behaviors.BehaviorDockingTestSimple,
+        "LiftLoadTest": dev_behaviors.BehaviorLiftLoadTest,
+        "FactoryTest": dev_behaviors.BehaviorFactoryTest,
+        "FactoryCentroidExtractor": dev_behaviors.BehaviorFactoryCentroidExtractor,
     })
     cls = class_map.get(data["behaviorClass"], Behavior)
     return cls

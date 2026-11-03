@@ -116,6 +116,10 @@ class ScriptClient(FakeClient):
     def lift_position(self):
         return robot.LiftPosition(height=util.Distance(mm=self.lift_height))
 
+    @lift_position.setter
+    def lift_position(self, position: robot.LiftPosition) -> None:
+        self.lift_height = position.height.mm
+
     def set_lift_height(self, height, *args, **kwargs):
         self.lowered.append(height)
         self.lift_height = height

@@ -1,16 +1,20 @@
 import math
 import os
+import tempfile
+import threading
 import time
 import unittest
-from typing import Dict, List, Set, cast
+from typing import Dict, FrozenSet, List, Set, cast
 from unittest import mock
 
 from PIL import Image
 
 import pycozmo
+import pycozmo.dev_behaviors
 import pycozmo.explore_behaviors
 import pycozmo.face_behaviors
 import pycozmo.feeding_behaviors
+import pycozmo.interactive_behaviors
 
 
 class FakeConnection(pycozmo.event.Dispatcher):
@@ -107,6 +111,30 @@ class FakeClient(pycozmo.event.Dispatcher):
         "LaserDriveStart",
         "LaserDriveEnd",
         "LaserGetOut",
+        "BouncerIdeaToPlay",
+        "BouncerRequestToPlay",
+        "BouncerWait",
+        "BouncerTimeout",
+        "BouncerIntoScore1",
+        "BouncerIntoScore2",
+        "BouncerIntoScore3",
+        "BouncerGetOut",
+        "GuardDogSettle",
+        "GuardDogSleepLoop",
+        "GuardDogPulse",
+        "GuardDogFakeout",
+        "GuardDogBusted",
+        "GuardDogPlayerSuccess",
+        "GuardDogCubeDisconnect",
+        "GuardDogTimeoutCubesTouched",
+        "GuardDogTimeoutCubesUntouched",
+        "OnboardingDiscoverCube",
+        "OnboardingReactToCube",
+        "OnboardingCubeDockFail",
+        "OnboardingSoundOnlyLiftEffortPickup",
+        "OnboardingInteractWithCube",
+        "OnboardingSoundOnlyLiftEffortPlaceLow",
+        "OnboardingReactToCubePutDown",
     )
 
     def __init__(self):
@@ -115,6 +143,7 @@ class FakeClient(pycozmo.event.Dispatcher):
         self.animation_groups = {name: None for name in self.ANIMATION_GROUPS}
         self.robot_orientation = pycozmo.robot.RobotOrientation.ON_THREADS
         self.robot_status = 0
+        self.lift_position = pycozmo.robot.LiftPosition(height=pycozmo.robot.MIN_LIFT_HEIGHT)
         self.played = []
         self.cancelled = 0
         self.wheel_speeds = []
@@ -128,6 +157,8 @@ class FakeClient(pycozmo.event.Dispatcher):
         self.turns = []
         self.drives = []
         self.head_angles = []
+        self.lights = []
+        self.audio = []
 
     def play_anim_group(self, name):
         self.played.append(name)
@@ -177,6 +208,23 @@ class FakeClient(pycozmo.event.Dispatcher):
 
     def set_lift_height(self, height, *args, **kwargs):
         self.head_angles.append(("lift", height))
+        self.lift_position = pycozmo.robot.LiftPosition(
+            height=pycozmo.util.Distance(mm=height))
+
+    def set_all_backpack_lights(self, light):
+        self.lights.append(light)
+
+    def set_backpack_lights(self, left, front, center, rear, right):
+        self.lights.append((left, front, center, rear, right))
+
+    def set_backpack_lights_off(self):
+        self.lights.append("off")
+
+    def set_head_light(self, enable=True):
+        self.lights.append(("head", enable))
+
+    def play_audio(self, fspec):
+        self.audio.append(fspec)
 
 
 class FakeCubes(list):
@@ -646,7 +694,7 @@ class TestGetBehaviorClassFromDict(unittest.TestCase):
 
     def test_unknown_class_falls_back(self):
         # Classes the resources name but nothing implements yet, and names nothing does.
-        for behavior_class in ("Bouncer", "GuardDog", "NoSuchBehaviorClass"):
+        for behavior_class in ("NoSuchBehaviorClass",):
             with self.subTest(behavior_class=behavior_class):
                 self.assertIs(
                     pycozmo.behavior.get_behavior_class_from_dict({"behaviorClass": behavior_class}),
@@ -752,17 +800,7 @@ class TestAgainstCozmoAssets(unittest.TestCase):
         self.assertEqual(unmapped, self.EXPECTED_UNMAPPED)
 
     #: Behavior classes in the resources with no implementation yet.
-    EXPECTED_UNMAPPED = frozenset({
-        "Bouncer",
-        "DevTurnInPlaceTest",
-        "DockingTestSimple",
-        "FactoryCentroidExtractor",
-        "FactoryTest",
-        "FireTruckAlarm",
-        "GuardDog",
-        "LiftLoadTest",
-        "OnboardingShowCube",
-    })
+    EXPECTED_UNMAPPED: FrozenSet[str] = frozenset()
 
     def test_every_reaction_trigger_has_a_behavior(self):
         for reactions in self.reaction_triggers.values():
@@ -1479,6 +1517,343 @@ class TestBehaviorFeedingEat(BehaviorTestCase):
             self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
         self.assertEqual(self.cli.played,
                          ["FeedingPlaceLiftOnCube_Severe", "FeedingAteNotFullEnough_Severe"])
+
+
+def tap_cube(cli, cube, delay=0.3):
+    """ Tap the cube after the delay, the way a player answers. """
+    timer = threading.Timer(delay, cli.dispatch,
+                            (pycozmo.event.EvtCubeTapped, cli, cube, 1))
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
+class TestSirenWav(unittest.TestCase):
+    """ The synthesized siren is robot-playable audio. """
+
+    def test_siren_is_valid_robot_audio(self):
+        import wave
+        with tempfile.TemporaryDirectory(prefix="siren-test") as directory:
+            path = pycozmo.interactive_behaviors.siren_wav(directory + "/siren.wav", cycles=1)
+            with wave.open(path, "rb") as wav:
+                self.assertEqual(wav.getnchannels(), 1)
+                self.assertEqual(wav.getsampwidth(), 2)
+                self.assertEqual(wav.getframerate(), 22050)
+                self.assertGreater(wav.getnframes(), 22050)
+
+
+class TestBehaviorBouncer(BehaviorTestCase):
+    """ Silence times the request out; taps take it up and score to three. """
+
+    def test_silence_times_out(self):
+        self.cli.cubes = FakeCubes([make_cube()])
+        behavior = self.make(pycozmo.interactive_behaviors.BehaviorBouncer,
+                             {"requestTimeout_sec": 0.4})
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        scored = [played for played in self.cli.played if played != "BouncerWait"]
+        self.assertEqual(scored,
+                         ["BouncerIdeaToPlay", "BouncerRequestToPlay",
+                          "BouncerTimeout", "BouncerGetOut"])
+        self.assertIn("BouncerWait", self.cli.played)
+
+    def test_taps_score_to_three(self):
+        cube = make_cube()
+        self.cli.cubes = FakeCubes([cube])
+        for delay in (0.5, 1.0, 1.5, 2.0):
+            tap_cube(self.cli, cube, delay=delay)
+        behavior = self.make(pycozmo.interactive_behaviors.BehaviorBouncer,
+                             {"requestTimeout_sec": 5.0, "scoreTimeout_sec": 5.0})
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=20.0))
+        scored = [played for played in self.cli.played if played != "BouncerWait"]
+        self.assertEqual(scored,
+                         ["BouncerIdeaToPlay", "BouncerRequestToPlay",
+                          "BouncerIntoScore1", "BouncerIntoScore2", "BouncerIntoScore3",
+                          "BouncerGetOut"])
+        self.assertIn("BouncerWait", self.cli.played)
+
+    def test_no_cube_nothing_to_tap(self):
+        behavior = self.make(pycozmo.interactive_behaviors.BehaviorBouncer)
+        self.assertFalse(behavior.wants_to_run())
+
+
+class TestBehaviorGuardDog(BehaviorTestCase):
+    """ An untouched watch times out quiet; movement wakes it, and faces and flips decide how. """
+
+    CONF = {"timeout_sec": 10.0, "round_sec": 2.0}
+
+    def test_untouched_watch_times_out(self):
+        self.cli.cubes = FakeCubes([make_cube()])
+        behavior = self.make(pycozmo.interactive_behaviors.BehaviorGuardDog,
+                             {"timeout_sec": 0.6, "round_sec": 0.3})
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertEqual(self.cli.played,
+                         ["GuardDogSettle", "GuardDogSleepLoop", "GuardDogSleepLoop",
+                          "GuardDogTimeoutCubesUntouched"])
+
+    def test_movement_with_face_is_busted(self):
+        cube = make_cube()
+        self.cli.cubes = FakeCubes([cube])
+        self.cli.faces = FakeFaces([make_face()])
+        timer = threading.Timer(0.6, setattr, (cube, "pose", mock.Mock(x=300.0, y=0.0, z=22.5)))
+        timer.daemon = True
+        behavior = self.make(pycozmo.interactive_behaviors.BehaviorGuardDog, self.CONF)
+        timer.start()
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertEqual(self.cli.played,
+                         ["GuardDogSettle", "GuardDogSleepLoop", "GuardDogBusted"])
+
+    def test_unseen_flip_scores_for_the_player(self):
+        cube = make_cube()
+        self.cli.cubes = FakeCubes([cube])
+        timer = threading.Timer(0.6, setattr, (cube, "up_axis", "XPositive"))
+        timer.daemon = True
+        behavior = self.make(pycozmo.interactive_behaviors.BehaviorGuardDog, self.CONF)
+        timer.start()
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertEqual(self.cli.played,
+                         ["GuardDogSettle", "GuardDogSleepLoop", "GuardDogPlayerSuccess"])
+
+    def test_unseen_nudge_is_a_fakeout(self):
+        cube = make_cube()
+        self.cli.cubes = FakeCubes([cube])
+        timer = threading.Timer(0.4, setattr, (cube, "pose", mock.Mock(x=250.0, y=0.0, z=22.5)))
+        timer.daemon = True
+        behavior = self.make(pycozmo.interactive_behaviors.BehaviorGuardDog,
+                             {"timeout_sec": 1.0, "round_sec": 2.0})
+        timer.start()
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertEqual(self.cli.played[:3],
+                         ["GuardDogSettle", "GuardDogSleepLoop", "GuardDogFakeout"])
+        self.assertEqual(self.cli.played[-1], "GuardDogTimeoutCubesTouched")
+
+    def test_disconnect_ends_the_watch(self):
+        cube = make_cube()
+        self.cli.cubes = FakeCubes([cube])
+        timer = threading.Timer(0.6, setattr, (cube, "connected", False))
+        timer.daemon = True
+        behavior = self.make(pycozmo.interactive_behaviors.BehaviorGuardDog, self.CONF)
+        timer.start()
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertEqual(self.cli.played,
+                         ["GuardDogSettle", "GuardDogSleepLoop", "GuardDogCubeDisconnect"])
+
+    def test_no_cube_nothing_to_guard(self):
+        behavior = self.make(pycozmo.interactive_behaviors.BehaviorGuardDog)
+        self.assertFalse(behavior.wants_to_run())
+
+
+class TestBehaviorFireTruckAlarm(BehaviorTestCase):
+    """ The alarm wails its siren, flashes red, and drives its circuit. """
+
+    def test_alarm_round_flashes_and_drives(self):
+        import pycozmo.lights
+        behavior = self.make(pycozmo.interactive_behaviors.BehaviorFireTruckAlarm,
+                             {"rounds": 1})
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertEqual(len(self.cli.audio), 1)
+        self.assertTrue(self.cli.audio[0].endswith(".wav"))
+        self.assertEqual(self.cli.lights.count(pycozmo.lights.red_light), 4)
+        self.assertEqual(self.cli.lights[-1], "off")
+        self.assertEqual(self.cli.drives, [100.0] * 4)
+        self.assertEqual(len(self.cli.turns), 4)
+        self.assertEqual(self.cli.played, [])
+
+
+class TestBehaviorOnboardingShowCube(BehaviorTestCase):
+    """ The cube found, picked up, and tapped is put back down; failures count against their budgets. """
+
+    CONF = {"Timeout_Sec": 10.0}
+
+    def run_show(self, cubes, timeout=10.0, **conf):
+        behavior = self.make(pycozmo.interactive_behaviors.BehaviorOnboardingShowCube,
+                             dict(self.CONF, **conf))
+        with mock.patch("pycozmo.cube_handling.find_cube", return_value=True), \
+                mock.patch("pycozmo.cube_handling.go_to_cube", return_value=True), \
+                mock.patch("pycozmo.cube_handling.pick_up_cube", return_value=True), \
+                mock.patch("pycozmo.cube_handling.put_down_cube", return_value=True) as put_down:
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=timeout))
+        return behavior, put_down
+
+    def test_tapped_cube_is_put_back_down(self):
+        cube = make_cube()
+        self.cli.cubes = FakeCubes([cube])
+        tap_cube(self.cli, cube, delay=0.5)
+        behavior, put_down = self.run_show([cube])
+        put_down.assert_called_once()
+        self.assertEqual(self.cli.played,
+                         ["OnboardingDiscoverCube", "OnboardingReactToCube",
+                          "OnboardingSoundOnlyLiftEffortPickup", "OnboardingInteractWithCube",
+                          "OnboardingSoundOnlyLiftEffortPlaceLow", "OnboardingReactToCubePutDown"])
+        self.assertIn(("lift", pycozmo.robot.MAX_LIFT_HEIGHT.mm), self.cli.head_angles)
+
+    def test_no_cube_gives_up(self):
+        behavior, _ = self.run_show([], MaxErrorsTotal=1, timeout=10.0)
+        self.assertEqual(self.cli.played, [])
+        self.assertDone()
+
+    def test_failed_pickup_gives_up(self):
+        cube = make_cube()
+        self.cli.cubes = FakeCubes([cube])
+        behavior = self.make(pycozmo.interactive_behaviors.BehaviorOnboardingShowCube,
+                             dict(self.CONF, MaxErrorsPickup=0))
+        with mock.patch("pycozmo.cube_handling.find_cube", return_value=True), \
+                mock.patch("pycozmo.cube_handling.go_to_cube", return_value=True), \
+                mock.patch("pycozmo.cube_handling.pick_up_cube", return_value=False):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertEqual(self.cli.played,
+                         ["OnboardingDiscoverCube", "OnboardingReactToCube"])
+
+
+class TestSnapFrame(BehaviorTestCase):
+    """ A dispatched frame is caught; silence is not. """
+
+    def test_dispatched_frame_is_caught(self):
+        image = make_laser_image()
+        timer = threading.Timer(0.3, self.cli.dispatch,
+                                (pycozmo.event.EvtNewRawCameraImage, self.cli, image))
+        timer.daemon = True
+        timer.start()
+        self.assertIs(pycozmo.dev_behaviors.snap_frame(self.cli, timeout=2.0), image)
+
+    def test_silence_returns_nothing(self):
+        self.assertIsNone(pycozmo.dev_behaviors.snap_frame(self.cli, timeout=0.2))
+
+
+class TestExtractCentroid(BehaviorTestCase):
+    """ A bright patch centers; darkness and floodlights do not. """
+
+    def test_bright_patch_centers(self):
+        centroid = pycozmo.dev_behaviors.extract_centroid(make_laser_image(), threshold=200)
+        self.assertEqual(centroid, (102.0, 52.0, 25))
+
+    def test_dark_frame_has_no_center(self):
+        self.assertIsNone(pycozmo.dev_behaviors.extract_centroid(Image.new("L", (320, 240))))
+
+    def test_flooded_frame_has_no_center(self):
+        image = Image.new("L", (320, 240), 255)
+        self.assertIsNone(pycozmo.dev_behaviors.extract_centroid(image))
+
+
+class TestBehaviorDevTurnInPlaceTest(BehaviorTestCase):
+    """ A commanded turn lands within its tolerance. """
+
+    def test_turn_lands_within_tolerance(self):
+        behavior = self.make(
+            pycozmo.dev_behaviors.BehaviorDevTurnInPlaceTest,
+            {"tests": [{"angle_deg": 90.0, "speed_deg_per_sec": 150.0,
+                        "accel_deg_per_sec2": 300.0, "tol_deg": 2.0}],
+             "gapBetweenTests_s": 0.1})
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertEqual(self.cli.turns, [math.radians(90.0)])
+        self.assertEqual(len(behavior.results), 1)
+        angle, error, passed = behavior.results[0]
+        self.assertEqual(angle, 90.0)
+        self.assertAlmostEqual(error, 0.0)
+        self.assertTrue(passed)
+        self.assertTrue(behavior.passed)
+
+    def test_error_wraps_round_the_circle(self):
+        error = pycozmo.dev_behaviors.test_error_degrees(math.radians(170.0),
+                                                         math.radians(-170.0), 20.0)
+        self.assertAlmostEqual(error, 0.0)
+
+
+class TestBehaviorDockingTestSimple(BehaviorTestCase):
+    """ A robot on its charger passes at once; anything else goes through the charger handling. """
+
+    def test_on_charger_passes_at_once(self):
+        self.cli.robot_status = pycozmo.robot.RobotStatusFlag.IS_ON_CHARGER
+        behavior = self.make(pycozmo.dev_behaviors.BehaviorDockingTestSimple)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=3.0))
+        self.assertTrue(behavior.passed)
+        self.assertEqual(self.cli.drives, [])
+
+    def test_off_charger_docks(self):
+        behavior = self.make(pycozmo.dev_behaviors.BehaviorDockingTestSimple)
+        with mock.patch("pycozmo.charger_handling.go_to_charger", return_value=True) as dock:
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=3.0))
+        dock.assert_called_once()
+        self.assertTrue(behavior.passed)
+
+
+class TestBehaviorLiftLoadTest(BehaviorTestCase):
+    """ The lift runs bottom to top and back, tracked all the way. """
+
+    def test_lift_tracks_its_orders(self):
+        behavior = self.make(pycozmo.dev_behaviors.BehaviorLiftLoadTest)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertEqual([ordered for ordered, _, _ in behavior.results],
+                         [pycozmo.robot.MIN_LIFT_HEIGHT.mm,
+                          pycozmo.robot.MAX_LIFT_HEIGHT.mm,
+                          pycozmo.robot.MIN_LIFT_HEIGHT.mm])
+        self.assertTrue(all(passed for _, _, passed in behavior.results))
+        self.assertTrue(behavior.passed)
+
+
+class TestBehaviorFactoryTest(BehaviorTestCase):
+    """ Every output answers in turn; a dead lift fails the checkout. """
+
+    def run_factory(self, timeout=15.0):
+        image = make_laser_image()
+        timer = threading.Timer(5.0, self.cli.dispatch,
+                                (pycozmo.event.EvtNewRawCameraImage, self.cli, image))
+        timer.daemon = True
+        timer.start()
+        behavior = self.make(pycozmo.dev_behaviors.BehaviorFactoryTest)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=timeout))
+        return behavior
+
+    def test_every_output_answers(self):
+        behavior = self.run_factory()
+        self.assertEqual(behavior.results,
+                         [("lights", True), ("head", True), ("lift", True),
+                          ("treads", True), ("camera", True)])
+        self.assertTrue(behavior.passed)
+
+    def test_dead_lift_fails_the_checkout(self):
+        behavior = self.make(pycozmo.dev_behaviors.BehaviorFactoryTest)
+        with mock.patch.object(self.cli, "set_lift_height"):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=15.0))
+        self.assertEqual(behavior.results,
+                         [("lights", True), ("head", True), ("lift", False)])
+        self.assertFalse(behavior.passed)
+
+
+class TestBehaviorFactoryCentroidExtractor(BehaviorTestCase):
+    """ A bright frame centers; no frame gives up. """
+
+    def test_bright_frame_centers(self):
+        behavior = self.make(pycozmo.dev_behaviors.BehaviorFactoryCentroidExtractor)
+        with mock.patch("pycozmo.dev_behaviors.snap_frame", return_value=make_laser_image()):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=3.0))
+        self.assertEqual(behavior.centroid, (102.0, 52.0, 25))
+        self.assertDone()
+
+    def test_no_frame_gives_up(self):
+        behavior = self.make(pycozmo.dev_behaviors.BehaviorFactoryCentroidExtractor,
+                             {"cameraTimeout_sec": 0.2})
+        with mock.patch("pycozmo.dev_behaviors.snap_frame", return_value=None):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=3.0))
+        self.assertIsNone(behavior.centroid)
+        self.assertDone()
 
 
 class TestEmotionEvents(BehaviorTestCase):
