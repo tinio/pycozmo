@@ -57,6 +57,21 @@ def beacons_for(cli: Any) -> BeaconMap:
         return fresh
 
 
+def _has_gone_somewhere(cli: Any, radius_mm: float) -> bool:
+    """
+    Whether the robot has driven further than the radius from where its odometry starts.
+
+    The pose starts at the origin and only driving moves it, so a robot that has gone nowhere
+    sits within any radius of it. Thinking about places, and looking over ones already passed,
+    are for after going somewhere; a robot that has not is fresh, and holds back.
+    """
+    try:
+        position = cli.pose.position
+        return math.hypot(position.x, position.y) > radius_mm
+    except Exception:
+        return False
+
+
 class BehaviorLookAround(BehaviorScript):
     """
     The staged look-round the hiking scans share: the body turns through
@@ -151,7 +166,16 @@ class BehaviorLookInPlaceMemoryMap(BehaviorLookAround):
 
     Same scan as exploring, aimed by its own configuration at the unknown
     near the robot. Without a memory map the looking is the whole of it.
+    It holds back until the robot has gone somewhere to look over: past
+    the configuration's location distance from where it started.
     """
+
+    def wants_to_run(self) -> bool:
+        if not super().wants_to_run():
+            return False
+        threshold = float(self.conf.get("params", {}).get(
+            "distanceThresholdForLocations_mm", 30.0))
+        return _has_gone_somewhere(self.cli, threshold)
 
 
 class BehaviorThinkAboutBeacons(BehaviorScript):
@@ -164,7 +188,11 @@ class BehaviorThinkAboutBeacons(BehaviorScript):
     """
 
     def wants_to_run(self) -> bool:
-        return True
+        beacons = beacons_for(self.cli)
+        if beacons.areas:
+            return True
+        radius = float(self.conf.get("params", {}).get("beaconRadius_mm", 175.0))
+        return _has_gone_somewhere(self.cli, radius)
 
     def script(self, cancel: threading.Event) -> None:
         params = self.conf.get("params", {})
@@ -245,11 +273,15 @@ class BehaviorVisitInterestingEdge(BehaviorScript):
     Squints, edges a little closer, and has a proper observe: the vantage
     geometry belongs to the memory map and is not here, so it approaches
     straight and lets the cliff stop keep it honest. A drive that gives up
-    halfway means no edge was there to visit after all.
+    halfway means no edge was there to visit after all. Cubes are what
+    counts as interesting here; with none known there is nothing to visit.
     """
 
     def wants_to_run(self) -> bool:
-        return True
+        try:
+            return bool(usable_cubes(self.cli))
+        except Exception:
+            return False
 
     def script(self, cancel: threading.Event) -> None:
         params = self.conf.get("params", {})
@@ -278,7 +310,7 @@ class BehaviorExploreVisitPossibleMarker(BehaviorScript):
     VISIT_DISTANCE = 200.0
 
     def wants_to_run(self) -> bool:
-        return True
+        return bool(self._candidates())
 
     def _candidates(self) -> List[Tuple[float, float]]:
         found: List[Tuple[float, float]] = []

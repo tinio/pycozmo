@@ -1057,10 +1057,23 @@ class BehaviorEarnedSparks(BehaviorPlayAnim):
     EarnedSparks - celebrate earned sparks.
 
     The configuration names no animation of its own, so it plays the
-    sparks trigger of the same name from the trigger map.
+    sparks trigger of the same name from the trigger map. It only wants
+    the robot when sparks earned by the needs actions wait uncelebrated,
+    which its activation claims; with none waiting it holds back, the way
+    an unimplemented behavior would.
     """
 
     default_anim_triggers = ("EarnedSparks",)
+
+    def wants_to_run(self) -> bool:
+        if self.needs is None or self.needs.uncelebrated_sparks <= 0:
+            return False
+        return super().wants_to_run()
+
+    def activate(self) -> None:
+        super().activate()
+        if self.sequence and self.needs is not None:
+            self.needs.celebrate_sparks()
 
 
 class BehaviorRespondToRenameFace(BehaviorPlayAnim):

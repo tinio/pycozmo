@@ -224,6 +224,20 @@ class TestNeedAction(unittest.TestCase):
         self.assertAlmostEqual(0.55, held.level("Play"))
         self.assertTrue(held.apply_action("SeeFace", now=60.0))
 
+    def test_spark_earning_actions_leave_sparks_uncelebrated(self):
+        held = needs.Needs(
+            needs={"Play": make_need(name="Play", level=0.5)},
+            actions={"FistBump": needs.NeedAction(
+                         "FistBump", {"Play": (0.25, 0.0)}, spark_weight=1.0),
+                     "SeeFace": needs.NeedAction("SeeFace", {"Play": (0.05, 0.0)})})
+        self.assertEqual(0, held.uncelebrated_sparks)
+        held.apply_action("SeeFace", now=0.0)
+        self.assertEqual(0, held.uncelebrated_sparks)
+        held.apply_action("FistBump", now=0.0)
+        self.assertEqual(1, held.uncelebrated_sparks)
+        self.assertEqual(1, held.celebrate_sparks())
+        self.assertEqual(0, held.uncelebrated_sparks)
+
 
 class TestNeedsStrategyConfig(unittest.TestCase):
 

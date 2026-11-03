@@ -242,8 +242,11 @@ class BehaviorFireTruckAlarm(BehaviorScript):
     """
     FireTruckAlarm - sound the alarm: siren, flashing lights, and an alarm circuit.
 
-    The user's spark, so it always wants to run. Each round wails the siren, flashes the backpack red, and drives a
-    small square; the activity's thirty seconds are a few such rounds.
+    The user's spark, so it never takes the robot on its own: the application asks for it, activating it straight or
+    through its Spark activity, and each round then wails the siren, flashes the backpack red, and drives a small
+    square; the activity's thirty seconds are a few such rounds. Holding back keeps a fresh robot - one without the
+    unlock the configuration names, which PyCozmo otherwise takes every robot to have earned - on its hiking intro
+    rather than sounding an alarm nobody asked for.
     """
 
     #: How many alarm rounds make the performance, and how far each leg of the square is, in mm.
@@ -252,7 +255,7 @@ class BehaviorFireTruckAlarm(BehaviorScript):
     LEG_SPEED = 80.0
 
     def wants_to_run(self) -> bool:
-        return True
+        return False
 
     def script(self, cancel: threading.Event) -> None:
         rounds = int(self.conf.get("rounds", self.ROUNDS))

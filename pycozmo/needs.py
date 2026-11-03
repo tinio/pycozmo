@@ -251,7 +251,7 @@ class NeedAction:
 class Needs:
     """ The robot's three needs, and everything that can change them. """
 
-    __slots__ = ["needs", "actions", "decay_period", "_decay_debt"]
+    __slots__ = ["needs", "actions", "decay_period", "_decay_debt", "uncelebrated_sparks"]
 
     def __init__(self,
                  needs: Dict[str, Need],
@@ -262,6 +262,8 @@ class Needs:
         #: How often decay is applied, which is also what the rates are quoted per.
         self.decay_period = float(decay_period)
         self._decay_debt = 0.0
+        #: Sparks earned by applied actions that no celebration has claimed yet.
+        self.uncelebrated_sparks = 0
 
     def __getitem__(self, name: str) -> Need:
         return self.needs[name]
@@ -355,7 +357,15 @@ class Needs:
             need = self.needs.get(name)
             if need is not None:
                 need.add(delta, now)
+        if action.spark_weight > 0.0:
+            self.uncelebrated_sparks += 1
         return True
+
+    def celebrate_sparks(self) -> int:
+        """ Claim the sparks earned so far for a celebration, saying how many there were. """
+        earned = self.uncelebrated_sparks
+        self.uncelebrated_sparks = 0
+        return earned
 
 
 def _read_rates(data: Dict, key: str) -> List[DecayRate]:

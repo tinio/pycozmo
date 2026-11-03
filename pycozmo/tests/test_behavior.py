@@ -917,6 +917,36 @@ class TestBehaviorPlayAnimWithFace(BehaviorTestCase):
         self.assertEqual(self.cli.played, ["NeutralFace"])
 
 
+class TestBehaviorEarnedSparks(BehaviorTestCase):
+    """ Sparks earned wait uncelebrated until the celebration runs, which claims them. """
+
+    def make_held(self):
+        return pycozmo.needs.Needs(
+            needs={},
+            actions={"FistBump": pycozmo.needs.NeedAction(
+                "FistBump", {}, spark_weight=1.0)})
+
+    def test_no_needs_no_celebration(self):
+        behavior = self.make(pycozmo.behavior.BehaviorEarnedSparks)
+        self.assertFalse(behavior.wants_to_run())
+
+    def test_no_sparks_no_celebration(self):
+        behavior = self.make(pycozmo.behavior.BehaviorEarnedSparks)
+        behavior.needs = self.make_held()
+        self.assertFalse(behavior.wants_to_run())
+
+    def test_earned_sparks_are_celebrated_once(self):
+        behavior = self.make(pycozmo.behavior.BehaviorEarnedSparks)
+        behavior.needs = self.make_held()
+        behavior.needs.apply_action("FistBump", now=0.0)
+        self.assertTrue(behavior.wants_to_run())
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=3.0))
+        self.assertEqual(self.cli.played, ["EarnedSparks"])
+        self.assertEqual(0, behavior.needs.uncelebrated_sparks)
+        self.assertFalse(behavior.wants_to_run())
+
+
 def complete_until_done(testcase, cli, timeout=15.0):
     """ Keep completing animations until the behavior reports done or time runs out. """
     deadline = time.perf_counter() + timeout
@@ -1073,6 +1103,21 @@ class TestBehaviorThinkAboutBeacons(BehaviorTestCase):
 
     CONF = {"params": {"beaconRadius_mm": 175.0, "newAreaAnimTrigger": "HikingReactToNewArea"}}
 
+    def test_fresh_world_holds_back(self):
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorThinkAboutBeacons, self.CONF)
+        self.assertFalse(behavior.wants_to_run())
+
+    def test_known_beacons_want_thinking(self):
+        from pycozmo.explore_behaviors import beacons_for
+        beacons_for(self.cli).areas.append((300.0, 0.0, 175.0))
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorThinkAboutBeacons, self.CONF)
+        self.assertTrue(behavior.wants_to_run())
+
+    def test_new_ground_wants_thinking(self):
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorThinkAboutBeacons, self.CONF)
+        self.cli.drive_straight(pycozmo.util.Distance(mm=200.0))
+        self.assertTrue(behavior.wants_to_run())
+
     def test_new_ground_is_remembered(self):
         from pycozmo.explore_behaviors import beacons_for
         behavior = self.make(pycozmo.explore_behaviors.BehaviorThinkAboutBeacons, self.CONF)
@@ -1137,6 +1182,15 @@ class TestBehaviorBringCubeToBeacon(BehaviorTestCase):
 class TestBehaviorVisitInterestingEdge(BehaviorTestCase):
     """ Squints, edges closer, and has a proper look. """
 
+    def test_nothing_known_nothing_to_visit(self):
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorVisitInterestingEdge)
+        self.assertFalse(behavior.wants_to_run())
+
+    def test_known_cube_wants_a_visit(self):
+        self.cli.cubes = FakeCubes([make_cube()])
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorVisitInterestingEdge)
+        self.assertTrue(behavior.wants_to_run())
+
     def test_looks_at_the_edge(self):
         behavior = self.make(pycozmo.explore_behaviors.BehaviorVisitInterestingEdge)
         behavior.activate()
@@ -1159,6 +1213,15 @@ class TestBehaviorVisitInterestingEdge(BehaviorTestCase):
 
 class TestBehaviorExploreVisitPossibleMarker(BehaviorTestCase):
     """ Drives to within looking distance of something half-seen. """
+
+    def test_nothing_known_nothing_offered(self):
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorExploreVisitPossibleMarker)
+        self.assertFalse(behavior.wants_to_run())
+
+    def test_known_cube_is_offered(self):
+        self.cli.cubes = FakeCubes([make_cube()])
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorExploreVisitPossibleMarker)
+        self.assertTrue(behavior.wants_to_run())
 
     def test_drives_out_to_a_cube(self):
         cube = mock.Mock()
@@ -1221,6 +1284,19 @@ class TestBehaviorLookAround(BehaviorTestCase):
         behavior.activate()
         self.assertTrue(complete_until_done(self, self.cli, timeout=15.0))
         self.assertEqual(len(self.cli.turns), 12)
+
+
+class TestBehaviorLookInPlaceMemoryMapWants(BehaviorTestCase):
+    """ The unknown scan holds back until the robot has gone somewhere to look over. """
+
+    def test_fresh_world_holds_back(self):
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorLookInPlaceMemoryMap)
+        self.assertFalse(behavior.wants_to_run())
+
+    def test_driven_robot_looks_over_where_it_was(self):
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorLookInPlaceMemoryMap)
+        self.cli.drive_straight(pycozmo.util.Distance(mm=100.0))
+        self.assertTrue(behavior.wants_to_run())
 
 
 class TestBehaviorBuildPyramidBase(BehaviorTestCase):
@@ -1651,6 +1727,10 @@ class TestBehaviorGuardDog(BehaviorTestCase):
 
 class TestBehaviorFireTruckAlarm(BehaviorTestCase):
     """ The alarm wails its siren, flashes red, and drives its circuit. """
+
+    def test_spark_waits_to_be_asked(self):
+        behavior = self.make(pycozmo.interactive_behaviors.BehaviorFireTruckAlarm)
+        self.assertFalse(behavior.wants_to_run())
 
     def test_alarm_round_flashes_and_drives(self):
         import pycozmo.lights
