@@ -98,6 +98,19 @@ New features:
     cube it had just rolled, too near for its marker to be known, and backs off 10 cm more now, and it looked all
     round before it looked ahead, and no longer does. In a dark room the cube was lost at once, as the charger is:
     the marker is told from 20 or more in brightness and a metre at most; the roll came to nothing for lack of light.
+With v2381 and the APK's 255 MB of converted Vorbis in place (tools/pycozmo_convert_audio.py on the 3.4.0 APK's
+ 1987 sounds), the 39 songs play end to end — examples/sing.py ran Singing_PopGoesTheWeasel (~23 s) through the speaker
+  with its animation — and faces run clean after pip install -e ".[faces]" plus tools/pycozmo_faces.py download.
+  The brain idled into NothingToDo bored animations, raised ReactToCliff on a cliff event and ReactToOnCharger when
+  docked, and still picked Hiking_FirstLookIntro first on a fresh robot as gated below (EarnedSparks held back until
+  sparks earned, FireTruckAlarm never unasked, explore behaviors needing beacons/cubes/ground). go_to_charger needs its
+  marker clearly lit and head-on-readable: in a dim room at ~40 cm the template scored ~0.35 below the 0.45 threshold,
+  driving ~15 cm nearer raised it into range; a lamp aimed straight at the marker glares white head-on and blinds the
+  final approach, light it from ~45° to the side instead. On a robot at FW 2381, volume 5000, no cubes:
+  FactoryCentroidExtractor centered the room lamp (1181 bright pixels), LiftLoadTest tracked 32->92->32 mm,
+  ThinkAboutBeacons recorded its beacon and played HikingReactToNewArea, and DevTurnInPlaceTest landed a 90 degree turn
+  0.4 deg out; cube behaviors and TrackLaser still await hardware.
+
 - The charger kept between runs. Client(charger_memory=path), or Charger.remember_in(path), writes what the robot knows
     of its charger to a file - the aim it learnt, which holds in any frame, and the charger's pose - and reads it at the
     start. The pose holds only in the frame the robot is in, which it keeps until it is picked up or switched off, and
@@ -160,6 +173,71 @@ New features:
     around. A frame is looked for with a neighbourhood 6 pixels around as well. Over 4154 images of two robots, 13
     more of the cubes Anki's engine saw are found, and cubes it did not know of; the search takes twice as long.
 - A cube light frame lasts 33.3 ms, as measured on a robot, not 30 ms.
+- Remembering the charger between process runs. Client(..., charger_memory=path) already kept what the robot knew of
+    its charger in a file; tools/pycozmo_app.py and pycozmo.run.connect() now wire it as --charger-memory PATH, so the
+    robot goes straight to where the file says without looking round when a new run starts off its charger.
+- Ten behavior classes restored from the resources, 35 to 45 of 76 mapped: pyramid and stack acknowledgements
+    (ReactToPyramid as BuildPyramidSuccess, ReactToStackOfCubes as AcknowledgeObject), the quiet post-calibration and
+    slope/tilt upright reactions (ReactToReturnedToTreads, ReactToMotorCalibration done at once, ReactToPlacedOnSlope
+    backing 60 mm at 40 mm/s on a timer), the pyramid-base config hook (OnConfigSeen as BuildPyramidReactToBase),
+    PyramidThankYou (BuildPyramidThankUser), the sparks wrapper (EarnedSparks — see below), name-saying
+    (RespondToRenameFace reads animationTrigger), and need-level animation picking (PlayAnimWithFace overrides
+    NeutralFace with NeedsMild/SevereLowEnergy/Play/RepairRequest by bracket). Trigger names verified against
+    AnimationTriggerMap.json.
+- Seven face behaviors restored, 45 to 52 of 76: FindFaces and its voice-command alias SearchForFace turn in 30-degree
+    steps settling 0.3 s per look with the head at 0 deg, stopping when a face seen within maxFaceAgeToLook_ms; DriveToFace
+    turns to the nearest fresh face and drives in 100 mm legs stopping 250 mm away (ComeHere_AlreadyHere / FoundFace);
+    EnrollFace waits up to tooManyFacesTimeout_sec for at most one face then enrolls under name (default Friend) for
+    MeetCozmoFirstEnrollmentCelebration; InteractWithFaces follows the nearest face up to maxTimeToTrackFace_s with
+    clamped turns; PeekABoo plays GetIn, Short/Surprised in rounds minTimesPeekBeforeQuit to maxTimesPeekBeforeQuit
+    while a fresh face stays, then GetOutHappy/Sad and NeedAction; LookForFaceAndCube sweeps face_sidePicks times by
+    face_bodyAngleRelRangeMax_deg with lookInPlaceAnimTrigger, stopping at a named face or any usable cube. New module
+    pycozmo.face_behaviors; all require Faces.available() and the camera. Untested on faces beyond the faces.py demo.
+- Six explore behaviors restored, 52 to 58 of 76: the staged hiking look-around (BehaviorLookAround) turns through
+    behavior_NumberOfScansBeforeStop full 360-degree scans stepping behavior s1_BodyAngleRange by s1_BodyAngleRange,
+    pitching the head through s1_HeadAngleRange and pausing s2_WaitMin/Max on s2_WaitAnimTrigger, then doing s4_HeadAngleChanges
+    head flicks, honoring behavior_CanCarryCube and behavior_ShouldLowerLift/ShouldResetTurnDirection. ExploreLookAroundInPlace
+    and LookInPlaceMemoryMap are its two aliases (the latter for unknown-area scans; see gating below). ThinkAboutBeacons
+    remembers beaconRadius_mm discs where the robot stood and plays newAreaAnimTrigger on new ground. BringCubeToBeacon
+    picks the nearest usable cube (or uses the carried one), drives to the nearest remembered beacon and puts it down,
+    cooling 45 s on failure. VisitInterestingEdge squints (HikingSquintStart), edges 60 mm at borderApproachSpeed_mmps
+    toward an edge and observes or notes edgesNotFound. ExploreVisitPossibleMarker drives to 200 mm of the nearest
+    known cube or remembered charger. Beacon discs live per-robot in pycozmo.explore_behaviors. New module
+    pycozmo.explore_behaviors.
+- Six pyramid and stack behaviors restored, 58 to 64 of 76: BuildPyramidBase lays two blocks SPACING=CUBE_SIDE+10 mm
+    apart, reacting First/SecondBlockUpright vs OnSide per placement and needing an anchor pose; BuildPyramid does the
+    same base then lifts a third cube onto it and plays BuildPyramidSuccess. CantHandleTallStack watches a stack of
+    minimumStackHeight (default 3) by looking down (MIN_HEAD_ANGLE, lookingInitialWait_s+lookingDownWait_s) then up
+    (MAX_HEAD_ANGLE, lookingUpWait_s) and playing CantHandleTallStack unless a block moved > minBlockMovedThreshold_mm.
+    CheckForStackAtInterval acknowledges a 3-high stack or stays quiet. KnockOverCubes grabs a spare block
+    (KnockOverGrabAttempt), eyes the stack (KnockOverEyes), rams its foot 120 mm at 80 mm/s and scores Success vs
+    Failure on >30 mm movement before putting the block down. RespondPossiblyRoll answers a possibly-rolled nearest
+    cube as Upright/OnSide. Extended pycozmo.cube_behaviors.
+- Three behaviors restored, 64 to 67 of 76: FeedingSearchForCube turns 30 deg steps asking FeedingSearchRequest
+    (Severe when Energy is Critical), stopping on FeedingReactToSeeCube (_Normal/_Severe) when a usable cube appears
+    or admitting FeedingSearchFailure after a full turn. FeedingEat drives the fork to the cube, nibbles 20 mm,
+    plays FeedingPlaceLiftOnCube, watches watchForShake_sec for a >15 mm summed pose shift as a shake, then
+    FeedingReactToShake + FeedingAteFullEnough or FeedingAteNotFullEnough (_Normal/_Severe by Energy bracket). TrackLaser
+    scans 12 looks of 30 deg each for saturated pixels (find_laser_spot: 3 to size/4 pixels >=250, mean as center),
+    centers within 5 deg via camera calibration, lunges 150 mm at 150 mm/s on LaserPounce/DriveStart/End, failing after
+    maxFailures misses, ending with LaserGetOut. Trigger _Normal/_Severe pairs are those in AnimationTriggerMap.json.
+    New module pycozmo.feeding_behaviors; TrackLaser is in pycozmo.explore_behaviors.
+- Nine behaviors restored, 67 to all 76. Bouncer asks BouncerIdeaToPlay/RequestToPlay, idles on BouncerWait while
+    waiting requestTimeout_sec for a tap via EvtCubeTapped, times out to Timeout/GetOut, and scores IntoScore1-3 up to
+    three taps before GetOut (scoring-round triggers inferred and documented). GuardDog guards usable_cubes: Settle,
+    sleeps in PULSE_EVERY=3-round pulses of SleepLoop/Pulse, watches MOVE_THRESHOLD=10 mm and flip detection; movement
+    without a face awake is a flip => PlayerSuccess, with a visible face => Busted, otherwise => Fakeout and resume;
+    disconnect => CubeDisconnect; timeout untouched/touched after WATCH_TIMEOUT. FireTruckAlarm has no animation in the
+    resources so synthesizes a two-tone siren (700/950 Hz wee-woo WAV at 22050 Hz) with flashing red backpack lights
+    and a 100 mm square circuit driven ROUNDS times (see gating below). OnboardingShowCube finds a connected cube
+    via find_cube, docks, ReactToCube, picks up, lifts to MAX_LIFT_HEIGHT, InteractWithCube, waits for a tap up to
+    Timeout_Sec, then puts it down and ReactToCubePutDown, budgeting MaxErrorsTotal/Pickup against find/dock/pickup
+    failures. DevTurnInPlaceTest turns by each tests[].angle_deg at speed_deg_per_sec checking error within tol_deg;
+    DockingTestSimple backs onto the charger via charger_handling.go_to_charger or passes if IS_ON_CHARGER; LiftLoadTest
+    runs MIN->MAX->MIN lift heights checking within 5 mm; FactoryTest works lights/head/lift/treads/camera in order
+    failing on first miss; FactoryCentroidExtractor snaps a camera frame and centroids its bright pixels. New modules
+    pycozmo.interactive_behaviors and pycozmo.dev_behaviors. Untested on cubes pending batteries (see pending verifications
+    note below); TrackLaser untested without a laser pointer.
 
 Bug fixes:
 - Client.load_anims() took 8 s, 7 of them finding the files of the animation groups' 573 triggers: each walked the whole
@@ -232,6 +310,15 @@ Bug fixes:
     it a few mm to the side and ten degrees off: it now steers by the marker in each camera image, as Anki's engine did,
     and comes in along the line the cube's side makes to within a millimetre or two, in simulation. On a robot: a cube
     taken flat on the next try. Docking for the other manoeuvres steers the same way.
+- Celebration, sparks and hiking behaviors now hold back on their real preconditions, matching Anki's engine: EarnedSparks
+    only wants the robot when sparks earned by need actions wait uncelebrated (Needs.uncelebrated_sparks, incremented
+    by NeedAction.spark_weight and claimed by celebrate_sparks() on activation); FireTruckAlarm never takes the robot
+    on its own — it is a user spark with no freeplay offer, and a fresh robot without its unlock now offers the hiking
+    intro instead of the alarm. ThinkAboutBeacons wants either remembered beacon discs or new ground past beaconRadius_mm
+    from the origin (fresh robot holds back); VisitInterestingEdge wants a known usable cube; LookInPlaceMemoryMap wants
+    distanceThresholdForLocations_mm of travel; ExploreVisitPossibleMarker wants a half-seen cube or charger candidate;
+    and a fresh world then offers only the hiking intro, as the activity-engine tests pin. BringCubeToBeacon holds back
+    until a beacon has been thought about (non-empty beacon map), preventing it from beating ThinkAboutBeacons.
 
 Documentation:
 - The README is a front page again, at half its length: what the robot does, needs, sees and hears, which had grown
@@ -247,6 +334,10 @@ Documentation:
     clash with those of modules, which Sphinx could not tell apart.
 - Faces were said to install with pip install pycozmo[faces], which gives upstream's version from PyPI, where there is
     no such extra: the messages and documents say pip install opencv-python-headless, or the extra of a source install.
+- The README's personality row now counts all 76 behavior classes as mapped. TODO.md tracks what still needs hardware:
+    cube batteries for Feeding, GuardDog/Bouncer/Onboarding, pyramid/stack behaviors, and a laser pointer for TrackLaser
+    (FW 2381, whole suite green save the pre-existing json_loader filesystem failure; volume-5000 docking notes in
+    docs/wsl_firmware_update.md). .gitignore now ignores exported conversation-*.txt files.
 
 
 v0.9.21 (Sep 28, 2026)

@@ -25,3 +25,5 @@ __pycache__/
 # The Cozmo application, which the Wwise Vorbis codebooks are extracted from. It is Anki's, not ours
 # to publish.
 *.apk
+
+conversation-2026*.txt
