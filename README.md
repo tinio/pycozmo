@@ -176,7 +176,7 @@ What the Cozmo app did off-board is reproduced as far as the resources and recor
 | Area | What works | Details |
 |---|---|---|
 | Animations and sound | Anki's animations from FlatBuffers `.bin` files and procedural faces; the sound of 98% of them once converted; Cozmo's 39 songs | [sound.md](docs/sound.md) |
-| Personality | The mood engine, the three nurture needs, the 21 reaction triggers (12 raised), and the activity engine that keeps a robot busy; 45 of the 76 behavior classes | [own_behavior.md](docs/own_behavior.md) |
+| Personality | The mood engine, the three nurture needs, the 21 reaction triggers (12 raised), and the activity engine that keeps a robot busy; 52 of the 76 behavior classes | [own_behavior.md](docs/own_behavior.md) |
 | Cubes and games | Connecting the cubes, their lights, and where they are; picking up, putting down, stacking, rolling, popping a wheelie; Quick Tap, Memory Match and Keep Away | [cubes_and_games.md](docs/cubes_and_games.md) |
 | Vision | Motion, in the image and on the ground; the cubes' markers; faces, with OpenCV, found, followed and known by name | [vision.md](docs/vision.md) |
 

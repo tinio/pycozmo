@@ -1,8 +1,11 @@
+import math
 import os
+import time
 import unittest
 from typing import Dict, List, Set, cast
 
 import pycozmo
+import pycozmo.face_behaviors
 
 
 class FakeConnection(pycozmo.event.Dispatcher):
@@ -54,6 +57,14 @@ class FakeClient(pycozmo.event.Dispatcher):
         "NeedsMildLowRepairRequest",
         "NeedsSevereLowRepairRequest",
         "NeutralFace",
+        "PeekABooGetIn",
+        "PeekABooShort",
+        "PeekABooSurprised",
+        "PeekABooGetOutHappy",
+        "PeekABooGetOutSad",
+        "ComeHere_AlreadyHere",
+        "ComeHere_SearchForFace_FoundFace",
+        "MeetCozmoFirstEnrollmentCelebration",
     )
 
     def __init__(self):
@@ -67,6 +78,13 @@ class FakeClient(pycozmo.event.Dispatcher):
         self.wheel_speeds = []
         self.stopped = 0
         self.cliff_stops = []
+        self.pose = pycozmo.util.Pose(
+            0.0, 0.0, 0.0, angle_z=pycozmo.util.Angle(radians=0.0))
+        self.faces = FakeFaces()
+        self.camera = []
+        self.turns = []
+        self.drives = []
+        self.head_angles = []
 
     def play_anim_group(self, name):
         self.played.append(name)
@@ -82,6 +100,62 @@ class FakeClient(pycozmo.event.Dispatcher):
 
     def enable_stop_on_cliff(self, enable=True):
         self.cliff_stops.append(enable)
+
+    def enable_camera(self, enable=True, color=False):
+        self.camera.append((enable, color))
+
+    def set_head_angle(self, angle, *args, **kwargs):
+        self.head_angles.append(angle)
+
+    def turn_in_place(self, angle, speed=1.0, wait=True, timeout=None):
+        self.turns.append(angle.radians)
+        heading = self.pose.rotation.angle_z.radians + angle.radians
+        self.pose = pycozmo.util.Pose(
+            self.pose.position.x, self.pose.position.y, self.pose.position.z,
+            angle_z=pycozmo.util.Angle(radians=heading))
+        return True
+
+    def drive_straight(self, distance, speed=100.0, wait=True, timeout=None):
+        self.drives.append(distance.mm)
+        heading = self.pose.rotation.angle_z.radians
+        self.pose = pycozmo.util.Pose(
+            self.pose.position.x + distance.mm * math.cos(heading),
+            self.pose.position.y + distance.mm * math.sin(heading),
+            self.pose.position.z,
+            angle_z=pycozmo.util.Angle(radians=heading))
+        for face in self.faces.visible():
+            face.distance = max(0.0, face.distance - distance.mm)
+        return True
+
+
+class FakeFaces:
+    """ Stands in for Faces, holding a fixed set of faces. """
+
+    def __init__(self, faces=()):
+        self._faces = list(faces)
+        self.enrolled = []
+
+    def available(self):
+        return True
+
+    def visible(self):
+        return [face for face in self._faces if face.present]
+
+    def enroll(self, name, views=5, timeout=30.0, cancel=None):
+        self.enrolled.append(name)
+        return True
+
+
+def make_face(face_id=1, x=500.0, y=0.0, z=0.0, distance=500.0, name=None):
+    """ A face in front of the robot, in the tracker's real classes. """
+    import time
+    face = pycozmo.faces.Face(face_id, time.perf_counter())
+    face.present = True
+    face.last_seen = time.perf_counter()
+    face.pose = pycozmo.faces.FacePose(x=x, y=y, z=z, time=time.perf_counter())
+    face.distance = distance
+    face.name = name
+    return face
 
 
 class BehaviorTestCase(unittest.TestCase):
@@ -504,7 +578,7 @@ class TestGetBehaviorClassFromDict(unittest.TestCase):
 
     def test_unknown_class_falls_back(self):
         # Classes the resources name but nothing implements yet, and names nothing does.
-        for behavior_class in ("Bouncer", "FindFaces", "GuardDog", "NoSuchBehaviorClass"):
+        for behavior_class in ("Bouncer", "GuardDog", "ThinkAboutBeacons", "NoSuchBehaviorClass"):
             with self.subTest(behavior_class=behavior_class):
                 self.assertIs(
                     pycozmo.behavior.get_behavior_class_from_dict({"behaviorClass": behavior_class}),
@@ -619,26 +693,19 @@ class TestAgainstCozmoAssets(unittest.TestCase):
         "CheckForStackAtInterval",
         "DevTurnInPlaceTest",
         "DockingTestSimple",
-        "DriveToFace",
-        "EnrollFace",
         "ExploreLookAroundInPlace",
         "ExploreVisitPossibleMarker",
         "FactoryCentroidExtractor",
         "FactoryTest",
         "FeedingEat",
         "FeedingSearchForCube",
-        "FindFaces",
         "FireTruckAlarm",
         "GuardDog",
-        "InteractWithFaces",
         "KnockOverCubes",
         "LiftLoadTest",
-        "LookForFaceAndCube",
         "LookInPlaceMemoryMap",
         "OnboardingShowCube",
-        "PeekABoo",
         "RespondPossiblyRoll",
-        "SearchForFace",
         "ThinkAboutBeacons",
         "TrackLaser",
         "VisitInterestingEdge",
@@ -757,6 +824,157 @@ class TestBehaviorPlayAnimWithFace(BehaviorTestCase):
             behavior_id="VC_HowAreYouDoing_Energy")
         behavior.activate()
         self.assertEqual(self.cli.played, ["NeutralFace"])
+
+
+def complete_until_done(testcase, cli, timeout=15.0):
+    """ Keep completing animations until the behavior reports done or time runs out. """
+    deadline = time.perf_counter() + timeout
+    while time.perf_counter() < deadline:
+        if testcase.posted(pycozmo.event.EvtBehaviorDone):
+            return True
+        cli.dispatch(pycozmo.event.EvtAnimationCompleted, cli)
+        time.sleep(0.05)
+    return bool(testcase.posted(pycozmo.event.EvtBehaviorDone))
+
+
+class TestBehaviorFindFaces(BehaviorTestCase):
+    """ A face ahead ends the search at once; otherwise the robot looks all round. """
+
+    def test_face_ahead_finishes_at_once(self):
+        self.cli.faces = FakeFaces([make_face()])
+        behavior = self.make(pycozmo.face_behaviors.BehaviorFindFaces)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=3.0))
+        self.assertEqual(self.cli.turns, [])
+
+    def test_no_face_turns_all_the_way_round(self):
+        behavior = self.make(pycozmo.face_behaviors.BehaviorFindFaces)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertEqual(len(self.cli.turns), 12)
+
+    def test_search_for_face_behaves_the_same(self):
+        self.cli.faces = FakeFaces([make_face()])
+        behavior = self.make(pycozmo.face_behaviors.BehaviorSearchForFace)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=3.0))
+        self.assertEqual(self.cli.turns, [])
+
+
+class TestBehaviorDriveToFace(BehaviorTestCase):
+    """ Drives to a face in legs, stopping at a social distance. """
+
+    def test_already_there_says_so(self):
+        self.cli.faces = FakeFaces([make_face(distance=100.0)])
+        behavior = self.make(pycozmo.face_behaviors.BehaviorDriveToFace)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli))
+        self.assertEqual(self.cli.drives, [])
+        self.assertEqual(self.cli.played, ["ComeHere_AlreadyHere"])
+
+    def test_drives_over_in_legs(self):
+        self.cli.faces = FakeFaces([make_face(x=500.0, distance=500.0)])
+        behavior = self.make(pycozmo.face_behaviors.BehaviorDriveToFace)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli))
+        self.assertEqual(self.cli.drives, [100.0, 100.0, 50.0])
+        self.assertEqual(self.cli.played, ["ComeHere_SearchForFace_FoundFace"])
+
+    def test_no_face_gives_up(self):
+        behavior = self.make(pycozmo.face_behaviors.BehaviorDriveToFace)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=3.0))
+        self.assertEqual(self.cli.drives, [])
+        self.assertEqual(self.cli.played, [])
+
+
+class TestBehaviorEnrollFace(BehaviorTestCase):
+    """ Enrolls a lone face; more than one is refused. """
+
+    def test_enrolls_a_single_face(self):
+        self.cli.faces = FakeFaces([make_face()])
+        behavior = self.make(pycozmo.face_behaviors.BehaviorEnrollFace)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli))
+        self.assertEqual(self.cli.faces.enrolled, ["Friend"])
+        self.assertEqual(self.cli.played, ["MeetCozmoFirstEnrollmentCelebration"])
+
+    def test_too_many_faces_refuses(self):
+        self.cli.faces = FakeFaces([make_face(face_id=1), make_face(face_id=2)])
+        behavior = self.make(pycozmo.face_behaviors.BehaviorEnrollFace,
+                             {"tooManyFacesTimeout_sec": 0.2})
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=5.0))
+        self.assertEqual(self.cli.faces.enrolled, [])
+        self.assertEqual(self.cli.played, [])
+
+
+class TestBehaviorInteractWithFaces(BehaviorTestCase):
+    """ Follows the nearest face, turning towards its bearing. """
+
+    def test_turns_towards_the_face(self):
+        self.cli.faces = FakeFaces([make_face(x=500.0, y=500.0, distance=700.0)])
+        behavior = self.make(
+            pycozmo.face_behaviors.BehaviorInteractWithFaces,
+            {"params": {"minTimeToTrackFace_s": 0.1, "maxTimeToTrackFace_s": 0.4,
+                        "minClampPeriod_s": 0.05, "maxClampPeriod_s": 0.05}})
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=5.0))
+        self.assertTrue(self.cli.turns)
+        self.assertAlmostEqual(self.cli.turns[0], math.pi / 4.0, places=5)
+
+    def test_no_face_leaves_at_once(self):
+        behavior = self.make(
+            pycozmo.face_behaviors.BehaviorInteractWithFaces,
+            {"params": {"minTimeToTrackFace_s": 0.1, "maxTimeToTrackFace_s": 0.4,
+                        "minClampPeriod_s": 0.05, "maxClampPeriod_s": 0.05}})
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=3.0))
+        self.assertEqual(self.cli.turns, [])
+
+
+class TestBehaviorPeekABoo(BehaviorTestCase):
+    """ Three rounds with a face watching, one sad round without. """
+
+    def test_plays_three_rounds_with_a_face(self):
+        self.cli.faces = FakeFaces([make_face()])
+        behavior = self.make(pycozmo.face_behaviors.BehaviorPeekABoo)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=20.0))
+        self.assertEqual(
+            self.cli.played,
+            ["PeekABooGetIn",
+             "PeekABooShort", "PeekABooSurprised",
+             "PeekABooShort", "PeekABooSurprised",
+             "PeekABooShort", "PeekABooSurprised",
+             "PeekABooGetOutHappy"])
+
+    def test_no_face_gets_one_sad_round(self):
+        behavior = self.make(pycozmo.face_behaviors.BehaviorPeekABoo)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=20.0))
+        self.assertEqual(
+            self.cli.played,
+            ["PeekABooGetIn", "PeekABooShort", "PeekABooSurprised", "PeekABooGetOutSad"])
+
+
+class TestBehaviorLookForFaceAndCube(BehaviorTestCase):
+    """ Turns towards a named face; otherwise sweeps and finishes. """
+
+    def test_named_face_turns_towards_it(self):
+        self.cli.faces = FakeFaces([make_face(x=0.0, y=500.0, name="Aunt")])
+        behavior = self.make(pycozmo.face_behaviors.BehaviorLookForFaceAndCube)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertTrue(self.cli.turns)
+        # A sweep step comes first, then the remaining bearing to the face.
+        self.assertAlmostEqual(sum(self.cli.turns), math.pi / 2.0, places=1)
+
+    def test_nothing_found_sweeps_then_finishes(self):
+        behavior = self.make(pycozmo.face_behaviors.BehaviorLookForFaceAndCube)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertEqual(len(self.cli.turns), 4)
 
 
 class TestEmotionEvents(BehaviorTestCase):
