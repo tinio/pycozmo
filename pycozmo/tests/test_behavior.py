@@ -5,9 +5,12 @@ import unittest
 from typing import Dict, List, Set, cast
 from unittest import mock
 
+from PIL import Image
+
 import pycozmo
 import pycozmo.explore_behaviors
 import pycozmo.face_behaviors
+import pycozmo.feeding_behaviors
 
 
 class FakeConnection(pycozmo.event.Dispatcher):
@@ -88,6 +91,22 @@ class FakeClient(pycozmo.event.Dispatcher):
         "KnockOverSuccess",
         "KnockOverFailure",
         "PutDownBlockPutDown",
+        "FeedingSearchRequest",
+        "FeedingSearchRequest_Severe",
+        "FeedingReactToSeeCube_Normal",
+        "FeedingReactToSeeCube_Severe",
+        "FeedingSearchFailure",
+        "FeedingPlaceLiftOnCube_Normal",
+        "FeedingPlaceLiftOnCube_Severe",
+        "FeedingReactToShake_Normal",
+        "FeedingAteFullEnough_Normal",
+        "FeedingAteNotFullEnough_Normal",
+        "FeedingAteNotFullEnough_Severe",
+        "LaserAcknowledge",
+        "LaserPounce",
+        "LaserDriveStart",
+        "LaserDriveEnd",
+        "LaserGetOut",
     )
 
     def __init__(self):
@@ -627,7 +646,7 @@ class TestGetBehaviorClassFromDict(unittest.TestCase):
 
     def test_unknown_class_falls_back(self):
         # Classes the resources name but nothing implements yet, and names nothing does.
-        for behavior_class in ("Bouncer", "GuardDog", "TrackLaser", "NoSuchBehaviorClass"):
+        for behavior_class in ("Bouncer", "GuardDog", "NoSuchBehaviorClass"):
             with self.subTest(behavior_class=behavior_class):
                 self.assertIs(
                     pycozmo.behavior.get_behavior_class_from_dict({"behaviorClass": behavior_class}),
@@ -739,13 +758,10 @@ class TestAgainstCozmoAssets(unittest.TestCase):
         "DockingTestSimple",
         "FactoryCentroidExtractor",
         "FactoryTest",
-        "FeedingEat",
-        "FeedingSearchForCube",
         "FireTruckAlarm",
         "GuardDog",
         "LiftLoadTest",
         "OnboardingShowCube",
-        "TrackLaser",
     })
 
     def test_every_reaction_trigger_has_a_behavior(self):
@@ -1323,6 +1339,146 @@ class TestBehaviorRespondPossiblyRoll(BehaviorTestCase):
     def test_nothing_known_nothing_to_say(self):
         behavior = self.make(pycozmo.cube_behaviors.BehaviorRespondPossiblyRoll)
         self.assertFalse(behavior.wants_to_run())
+
+
+def make_laser_image(x=100, y=50, size=5, width=320, height=240):
+    """ A dark camera frame with a saturated square where the laser dot sits. """
+    image = Image.new("L", (width, height))
+    image.paste(255, (x, y, x + size, y + size))
+    return image
+
+
+class TestFindLaserSpot(BehaviorTestCase):
+    """ A small saturated patch is a laser dot; darkness and floodlights are not. """
+
+    def test_bright_dot_is_found(self):
+        spot = pycozmo.explore_behaviors.find_laser_spot(make_laser_image())
+        self.assertEqual(spot, (102.0, 52.0, 25))
+
+    def test_dark_frame_finds_nothing(self):
+        self.assertIsNone(pycozmo.explore_behaviors.find_laser_spot(
+            Image.new("L", (320, 240))))
+
+    def test_flooded_frame_finds_nothing(self):
+        image = Image.new("L", (320, 240), 255)
+        self.assertIsNone(pycozmo.explore_behaviors.find_laser_spot(image))
+
+
+class TestBehaviorTrackLaser(BehaviorTestCase):
+    """ Nothing seen ends the hunt; a centered dot earns a lunge, an off-center one a turn. """
+
+    CONF = {"params": {"maxFailures": 1}}
+
+    def test_nothing_seen_ends_the_hunt(self):
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorTrackLaser, self.CONF)
+        with mock.patch.object(behavior, "_snap", return_value=None):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertEqual(len(self.cli.turns), 12)
+        self.assertEqual(self.cli.played, ["LaserGetOut"])
+
+    def test_centered_spot_gets_pounced(self):
+        from pycozmo.camera import DEFAULT_CALIBRATION
+        spot = (DEFAULT_CALIBRATION.cx, 120.0, 10)
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorTrackLaser, self.CONF)
+        with mock.patch.object(behavior, "_snap", side_effect=[spot] + [None] * 12):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertEqual(self.cli.played,
+                         ["LaserAcknowledge", "LaserPounce", "LaserDriveStart",
+                          "LaserDriveEnd", "LaserGetOut"])
+        self.assertEqual(self.cli.drives, [150.0])
+
+    def test_off_center_spot_turns_to_face_it(self):
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorTrackLaser, self.CONF)
+        with mock.patch.object(behavior, "_snap", side_effect=[(0.0, 0.0, 10)] + [None] * 12):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertEqual(len(self.cli.turns), 13)
+        self.assertEqual(self.cli.drives, [])
+        self.assertEqual(self.cli.played, ["LaserAcknowledge", "LaserGetOut"])
+
+
+class TestBehaviorFeedingSearchForCube(BehaviorTestCase):
+    """ A cube in sight ends the search at once; an empty floor gets a full turn. """
+
+    def test_cube_in_sight_finishes_at_once(self):
+        behavior = self.make(pycozmo.feeding_behaviors.BehaviorFeedingSearchForCube)
+        with mock.patch("pycozmo.feeding_behaviors.usable_cubes", return_value=[mock.Mock()]):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=3.0))
+        self.assertEqual(self.cli.turns, [])
+        self.assertEqual(self.cli.played,
+                         ["FeedingSearchRequest", "FeedingReactToSeeCube_Normal"])
+
+    def test_empty_floor_searches_all_round(self):
+        behavior = self.make(pycozmo.feeding_behaviors.BehaviorFeedingSearchForCube)
+        with mock.patch("pycozmo.feeding_behaviors.usable_cubes", return_value=[]):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=15.0))
+        self.assertEqual(len(self.cli.turns), 12)
+        self.assertEqual(self.cli.played, ["FeedingSearchRequest", "FeedingSearchFailure"])
+
+    def test_severe_energy_asks_severely(self):
+        behavior = self.make(pycozmo.feeding_behaviors.BehaviorFeedingSearchForCube)
+        behavior.needs = StubNeeds({"Energy": "Critical"})
+        with mock.patch("pycozmo.feeding_behaviors.usable_cubes", return_value=[mock.Mock()]):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=3.0))
+        self.assertEqual(self.cli.played,
+                         ["FeedingSearchRequest_Severe", "FeedingReactToSeeCube_Severe"])
+
+
+class TestBehaviorFeedingEat(BehaviorTestCase):
+    """ A shaken cube counts as fed; a still one does not; no cube leaves quietly. """
+
+    CONF = {"watchForShake_sec": 0.4}
+
+    def run_eat(self, testcase, cubes, timeout=10.0):
+        behavior = testcase.make(pycozmo.feeding_behaviors.BehaviorFeedingEat, self.CONF)
+        with mock.patch("pycozmo.feeding_behaviors.usable_cubes", return_value=cubes), \
+                mock.patch("pycozmo.cube_handling.go_to_cube", return_value=True):
+            behavior.activate()
+            testcase.assertTrue(complete_until_done(testcase, testcase.cli, timeout=timeout))
+        return behavior
+
+    def test_no_cube_leaves_quietly(self):
+        self.run_eat(self, [])
+        self.assertEqual(self.cli.played, [])
+        self.assertEqual(self.cli.drives, [])
+
+    def test_still_cube_is_not_enough(self):
+        cube = make_cube()
+        self.run_eat(self, [cube])
+        self.assertEqual(self.cli.played,
+                         ["FeedingPlaceLiftOnCube_Normal", "FeedingAteNotFullEnough_Normal"])
+        self.assertEqual(self.cli.drives, [20.0])
+
+    def test_shaken_cube_counts_as_fed(self):
+        cube = make_cube()
+        behavior = self.make(pycozmo.feeding_behaviors.BehaviorFeedingEat, self.CONF)
+        before = mock.Mock(x=0.0, y=0.0, z=0.0)
+        after = mock.Mock(x=50.0, y=0.0, z=0.0)
+        with mock.patch("pycozmo.feeding_behaviors.usable_cubes", return_value=[cube]), \
+                mock.patch("pycozmo.cube_handling.go_to_cube", return_value=True), \
+                mock.patch.object(behavior, "_pose_of", side_effect=[before, after]):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertEqual(self.cli.played,
+                         ["FeedingPlaceLiftOnCube_Normal", "FeedingReactToShake_Normal",
+                          "FeedingAteFullEnough_Normal"])
+        self.assertEqual(self.cli.drives, [20.0, 20.0])
+
+    def test_severe_energy_uses_severe_triggers(self):
+        cube = make_cube()
+        behavior = self.make(pycozmo.feeding_behaviors.BehaviorFeedingEat, self.CONF)
+        behavior.needs = StubNeeds({"Energy": "Critical"})
+        with mock.patch("pycozmo.feeding_behaviors.usable_cubes", return_value=[cube]), \
+                mock.patch("pycozmo.cube_handling.go_to_cube", return_value=True):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
+        self.assertEqual(self.cli.played,
+                         ["FeedingPlaceLiftOnCube_Severe", "FeedingAteNotFullEnough_Severe"])
 
 
 class TestEmotionEvents(BehaviorTestCase):

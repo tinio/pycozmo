@@ -18,7 +18,7 @@ import time
 import weakref
 from typing import Any, List, Optional, Tuple
 
-from . import cube_handling, util
+from . import camera, cube_handling, event, util
 from .cube_behaviors import BehaviorScript, usable_cubes
 from .cube_handling import Cancelled, _check, _wrap
 
@@ -313,3 +313,110 @@ class BehaviorExploreVisitPossibleMarker(BehaviorScript):
         if not self.cli.go_to_pose(util.Pose(px, py, 0.0, angle_z=util.Angle(radians=bearing)),
                                    wait=True):
             return self.give_up("could not get there")
+
+
+def find_laser_spot(image: Any) -> Optional[Tuple[float, float, int]]:
+    """
+    Where the brightest blob in a frame is, if it looks like a laser dot.
+
+    A laser pointer saturates a small patch however the exposure is set, so
+    saturated pixels are the whole test: a few to a few thousand of them,
+    and not half the frame, which would be a lamp or a window. Returns the
+    middle of the patch in pixels and how many of them there are.
+    """
+    import numpy as np
+    gray = np.asarray(image.convert("L"), dtype=np.uint8)
+    rows, cols = np.nonzero(gray >= 250)
+    if len(rows) < 3 or len(rows) > gray.size // 4:
+        return None
+    return float(cols.mean()), float(rows.mean()), len(rows)
+
+
+class BehaviorTrackLaser(BehaviorScript):
+    """
+    TrackLaser - find a laser dot, follow it, and pounce on it.
+
+    Scans round for something saturated enough to be a laser, turns to
+    keep it centered, and lunges when it sits still ahead. Scans that find
+    nothing count against the configured failures, and three in a row end
+    it. The darkened exposure the configuration asks for needs an exposure
+    control PyCozmo does not have yet; a laser saturates at any exposure,
+    so the hunt works regardless.
+    """
+
+    #: How far the lunge goes, in mm, and how fast, in mm/s. A spot counts as
+    #: centered when it bears less than five degrees off ahead - about 25 px.
+    CENTER_TOLERANCE = math.radians(5.0)
+    LUNGE_DISTANCE = 150.0
+    LUNGE_SPEED = 150.0
+    #: Looks per scan round, and scans that may find nothing in a row.
+    SCAN_STEPS = 12
+    SCAN_TURN = math.radians(30.0)
+
+    def __init__(self, cli: Any, conf: Any, robot_needs: Any = None):
+        super().__init__(cli, conf, robot_needs)
+        params = conf.get("params", {})
+        self.max_failures = int(params.get("maxFailures", 3))
+        self.look_around_trigger = str(params.get("lookAroundAnimTrigger", ""))
+        self.look_down_trigger = str(params.get("lookInPlaceAnimTrigger", ""))
+
+    def wants_to_run(self) -> bool:
+        return True
+
+    def _bearing(self, x: float) -> float:
+        calib = getattr(self.cli, "camera_calibration", None) or camera.DEFAULT_CALIBRATION
+        return math.atan((x - calib.cx) / calib.fx)
+
+    def _snap(self) -> Optional[Tuple[float, float, int]]:
+        images: List[Any] = []
+        got = threading.Event()
+
+        def on_image(_cli: Any, image: Any) -> None:
+            images.append(image)
+            got.set()
+
+        handler = self.cli.add_handler(event.EvtNewRawCameraImage, on_image, one_shot=True)
+        try:
+            if not got.wait(2.0):
+                return None
+        finally:
+            self.cli.del_handler(event.EvtNewRawCameraImage, handler)
+        return find_laser_spot(images[0])
+
+    def script(self, cancel: threading.Event) -> None:
+        self.cli.enable_camera(True, color=False)
+        self.cli.set_head_angle(math.radians(-5.0))
+        failures = 0
+        lunges = 0
+        while failures < self.max_failures and lunges < 3:
+            _check(cancel)
+            if self.look_around_trigger:
+                self.play(self.look_around_trigger, cancel)
+            spot = None
+            for _ in range(self.SCAN_STEPS):
+                _check(cancel)
+                spot = self._snap()
+                if spot is not None:
+                    break
+                self.cli.turn_in_place(util.Angle(radians=self.SCAN_TURN), wait=True)
+            if spot is None:
+                failures += 1
+                if self.look_down_trigger:
+                    self.play(self.look_down_trigger, cancel)
+                continue
+            failures = 0
+            self.play("LaserAcknowledge", cancel)
+            x, _, _ = spot
+            bearing = self._bearing(x)
+            if abs(bearing) > self.CENTER_TOLERANCE:
+                self.cli.turn_in_place(util.Angle(radians=bearing), wait=True)
+                _check(cancel)
+                continue
+            self.play("LaserPounce", cancel)
+            self.play("LaserDriveStart", cancel)
+            self.cli.drive_straight(util.Distance(mm=self.LUNGE_DISTANCE),
+                                    speed=self.LUNGE_SPEED, wait=True)
+            self.play("LaserDriveEnd", cancel)
+            lunges += 1
+            _check(cancel)
+        self.play("LaserGetOut", cancel)
