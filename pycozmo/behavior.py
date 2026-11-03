@@ -832,8 +832,21 @@ class BehaviorDriveOffCharger(Behavior):
             return False
         return time.perf_counter() - self.last_run >= self.SETTLE_TIME
 
+    #: Wake animation to play before driving, if available in the resources.
+    WAKE_TRIGGERS = ("HikingWakeUpOffCharger", "ConnectWakeUp", "anim_launch_wakeup_01")
+
     def activate(self) -> None:
-        # TODO: Play a wake up animation. The resources name none for this behavior.
+        # Play a wake-up animation if the resources offer one, then drive off. The
+        # DriveOffCharger configuration names no animation of its own; HikingWakeUpOffCharger
+        # and ConnectWakeUp are the closest the assets come.
+        groups = self.cli.animation_groups or {}
+        for trigger in self.WAKE_TRIGGERS:
+            if trigger in groups:
+                try:
+                    self.cli.play_anim_group(trigger)
+                except Exception:
+                    pass
+                break
         # Getting going under its own steam makes the robot more confident.
         self.attempts += 1
         self.last_run = time.perf_counter()

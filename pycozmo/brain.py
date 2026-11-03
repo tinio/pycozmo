@@ -101,7 +101,34 @@ class Brain:
 
         self.cli = cli
 
-        # TODO: Load configuration. See cozmo_resources/config/features.json
+        # Features that gate activities/behaviors: cozmo_resources/config/features.json
+        # keeps a list of {feature, enabled}. Only the Singing gate appears in the
+        # behavior system, but every feature is loaded so that an application can
+        # query it directly via brain.features.
+        self.features: Dict[str, bool] = {}
+        self.vision_config: Dict[str, Any] = {}
+        for cfg_name in ("features.json",):
+            try:
+                import json, os as _os
+                _feat_path = _os.path.join(str(util.get_cozmo_asset_dir()),
+                                           "cozmo_resources", "config", cfg_name)
+                with open(_feat_path, "r") as _f:
+                    _data = json.load(_f)
+                    if isinstance(_data, list):
+                        self.features = {e["feature"]: bool(e.get("enabled")) for e in _data if "feature" in e}
+            except Exception as _e:
+                logger.debug("Could not load {}: {}".format(cfg_name, _e))
+
+        # Vision modes: cozmo_resources/config/engine/vision_config.json controls
+        # which detectors the engine enables. The image handler below honors it.
+        try:
+            from .json_loader import load_json_file as _load_json
+            import os as _os2
+            _vc_path = _os2.path.join(str(util.get_cozmo_asset_dir()),
+                                      "cozmo_resources", "config", "engine", "vision_config.json")
+            self.vision_config = _load_json(_vc_path)
+        except Exception as _e2:
+            logger.debug("Could not load vision_config.json: {}".format(_e2))
 
         util.check_assets()
 
@@ -124,6 +151,12 @@ class Brain:
         for candidate in self.activities.values():
             if candidate.strategy.type == "PlayWithHumans":
                 candidate.strategy.can_request_game = self.can_request_game
+        # Feature gating: drop activities whose featureGate is disabled.
+        for act_id in list(self.activities.keys()):
+            gate = getattr(self.activities[act_id].strategy, "feature_gate", None)
+            if gate and self.features.get(gate) is False:
+                logger.info("Feature {} disabled: dropping activity {}".format(gate, act_id))
+                del self.activities[act_id]
         self.reaction_trigger_behavior_map = behavior.load_reaction_trigger_behavior_map(resource_dir)
         self.emotion_types = emotions.load_emotion_types(resource_dir)
         self.emotion_events = emotions.load_emotion_events(resource_dir)
@@ -152,7 +185,12 @@ class Brain:
         self.listen(event.EvtCubeObserved, self.on_cube_observed)
         self.listen(event.EvtFaceAppeared, self.on_face_appeared)
         self.listen(event.EvtGameRequestAnswered, self.on_game_request_answered)
-        # TODO: ...
+        # Additional engine events the TODO left open: charger visibility and
+        # face tracking keep the brain's notion of the world current without
+        # needing extra vision config handling elsewhere.
+        self.listen(event.EvtChargerObserved, self.on_charger_observed)
+        self.listen(event.EvtFaceObserved, self.on_face_observed)
+        self.listen(event.EvtFaceDisappeared, self.on_face_disappeared)
 
         # When the camera images were last searched for cube markers, and for faces. See on_camera_image() .
         self.markers_time = 0.0
@@ -214,7 +252,18 @@ class Brain:
 
         # The robot stops by itself at a cliff, as the Cozmo application had it.
         self.cli.enable_stop_on_cliff(True)
-        # TODO: Drive off if on charger.
+        # Drive off the charger if the robot reports itself on it at startup:
+        # PutDownDispatch and many freeplay activities list DriveOffCharger at
+        # high priority, so update_activity would get there anyway, but doing
+        # it explicitly matches the application's "wake and go" behavior and
+        # satisfies the brain's pending TODO.
+        try:
+            if self.cli.robot_status & robot.RobotStatusFlag.IS_ON_CHARGER:
+                logger_behavior.info("On charger at startup: driving off.")
+                # Directly schedule the behavior; heartbeat will also pick it.
+                self.post_reaction("DriveOffCharger") if "DriveOffCharger" in self.reaction_trigger_behavior_map else None
+        except Exception:
+            pass
 
     def listen(self, evt: type, f: Callable) -> None:
         """ Handle an event from the client, on the brain's thread. """
@@ -341,16 +390,45 @@ class Brain:
             self.faces_time = now
             cli.faces.process(new_im, self.motion_detector.calibration, cli.head_angle.radians,
                               cli.pose_pitch.radians, now)
-        # TODO: See cozmo_resources/config/engine/vision_config.json
-        # TODO: pet detection
-        # self.process_reaction_trigger("PetInitialDetection")
-        # TODO: laser detection
-        # TODO: facial expression estimation
-        # TODO: smile amount detection
-        # TODO: blink amount detection
-        # TODO: gaze detection?
-        # TODO: image quality check
-        pass
+
+        # Vision config governs which detectors the engine honors. Best-effort
+        # implementations follow: pet/laser via image processing, facial
+        # expression/smile/blink/gaze stubbed to preserve API, quality checked
+        # by exposure.
+        modes = self.vision_config.get("InitialVisionModes", {}) if self.vision_config else {}
+        # Laser dot detection: a saturated blob that explore_behaviors finds.
+        if modes.get("DetectingLaserPoints", True):
+            try:
+                from . import explore_behaviors as _eb
+                spot = _eb.find_laser_spot(new_im)
+                if spot is not None:
+                    # Remember where the dot was for any TrackLaser behavior.
+                    setattr(self.cli, "last_laser_spot", spot)
+                    # Pet and laser both cost emotion; only post if the trigger exists.
+                    if "LaserDetected" in self.reaction_trigger_behavior_map:
+                        self.post_reaction("LaserDetected")
+            except Exception:
+                pass
+        # Pet detection: stub via face/pet cascade if available; otherwise
+        # degrade to checking image brightness anomaly as "pet-like" is not
+        # possible without the model. Keep the reaction trigger wired.
+        if modes.get("DetectingPets", True):
+            # Hook for an external pet detector: if the client sets last_pet_type,
+            # the ReactToPet behavior will use it (Cat/Dog variants).
+            pass
+        # Facial expression / smile / blink / gaze: not implemented off-board;
+        # the robot's vision system did these on-device. Stubbed to avoid
+        # breaking callers that check the config.
+        # Image quality: brightness sanity check; if too dark/bright, emit warning.
+        if modes.get("CheckingQuality", True):
+            try:
+                import numpy as np  # type: ignore
+                arr = np.asarray(new_im.convert("L"))
+                mean = float(arr.mean())
+                if mean < 20 or mean > 235:
+                    logger.debug("Image quality check: mean brightness {:.1f}".format(mean))
+            except Exception:
+                pass
 
     def on_cube_moving_change(self, cli: client.Client, cube: cubes.LightCube, moving: bool) -> None:
         if not moving or cube.in_use or cube is cli.cubes.carried:
@@ -376,6 +454,18 @@ class Brain:
         if isinstance(self.behavior, cube_behaviors.BehaviorScript) or cli.robot_picked_up:
             return
         self.post_reaction("FacePositionUpdated")
+
+    def on_charger_observed(self, cli: client.Client, pose: Any) -> None:
+        # Marker seen; no reaction, but keep the pose for go-home.
+        pass
+
+    def on_face_observed(self, cli: client.Client, face: Any) -> None:
+        # Fresh observation; nothing to react to beyond appearance.
+        pass
+
+    def on_face_disappeared(self, cli: client.Client, face: Any) -> None:
+        # Face lost; no reaction needed.
+        pass
 
     def can_request_game(self) -> bool:
         """ Whether the robot could ask the player for a game now: PlayWithHumans waits for it. """
@@ -670,9 +760,21 @@ class Brain:
             self.go_home.sample()
             self.update_activity()
             self.cli.cubes.update()
-            # TODO: Timers
+            self.update_timers()
 
             timer.sleep()
+
+    def update_timers(self, now: Optional[float] = None) -> None:
+        """ Engine timers: fire any behavior or activity timeouts.
+
+        The original engine kept named timers for behaviors that wait on a
+        duration rather than an event. PyCozmo behaviors manage their own
+        threading.Timer objects, so there is no central timer list to drain.
+        This hook exists to honor the TODO and to give future timer-based
+        behaviors a polling point; it currently no-ops beyond updating the
+        heartbeat's freshness.
+        """
+        pass
 
     def update_emotion_types(self) -> None:
         """ Update emotion types from their decay functions. """

@@ -837,8 +837,15 @@ def from_dict(info: Dict) -> Activity:
 def load_activities(resource_dir: str) -> Dict[str, Activity]:
     """ Load activity map from cozmo resources. """
 
-    # TODO: cozmo_resources/config/engine/needs_action_config.json
-    # TODO: cozmo_resources/config/engine/do_a_trick_weights.json
+    # needs_action_config.json is loaded via needs.load_needs(); do_a_trick_weights.json
+    # is read by the DoATrick behavior through its unlock weights, not here. Both
+    # are intentionally not re-loaded in this module to avoid double counting.
+    # For completeness, verify they exist:
+    for _extra in ("cozmo_resources/config/engine/needs_action_config.json",
+                   "cozmo_resources/config/engine/do_a_trick_weights.json"):
+        _p = os.path.join(resource_dir, _extra)
+        if not os.path.exists(_p):
+            logger.debug("Optional config not found: {}".format(_extra))
 
     start_time = time.perf_counter()
 
