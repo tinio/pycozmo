@@ -214,8 +214,9 @@ class BehaviorBringCubeToBeacon(BehaviorScript):
 
     Picks up the nearest usable cube unless one is carried already, drives
     it to the nearest beacon the robot has thought about, and puts it down
-    there. A failed run holds later ones off for the cooldown the
-    configuration asks for.
+    there. With no beacon thought about yet there is nowhere to bring
+    anything, so it holds back; a failed run holds later ones off for the
+    cooldown the configuration asks for.
     """
 
     def __init__(self, cli: Any, conf: Any, robot_needs: Any = None):
@@ -225,6 +226,8 @@ class BehaviorBringCubeToBeacon(BehaviorScript):
 
     def wants_to_run(self) -> bool:
         if time.perf_counter() - self.last_failure < self.cooldown:
+            return False
+        if not beacons_for(self.cli).areas:
             return False
         cubes = getattr(self.cli, "cubes", None)
         if cubes is not None and getattr(cubes, "carried", None) is not None:

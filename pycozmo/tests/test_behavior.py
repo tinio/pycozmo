@@ -1173,6 +1173,17 @@ class TestBehaviorBringCubeToBeacon(BehaviorTestCase):
         put_down.assert_not_called()
         self.assertNotIn("pose", self.cli.drives)
 
+    def test_no_beacon_holds_back(self):
+        self.cli.cubes = FakeCubes([make_cube()])
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorBringCubeToBeacon)
+        self.assertFalse(behavior.wants_to_run())
+
+    def test_beacon_and_cube_wants_to_run(self):
+        self.cli.cubes = FakeCubes([make_cube()])
+        self.seed_beacon()
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorBringCubeToBeacon)
+        self.assertTrue(behavior.wants_to_run())
+
     def test_recent_failure_holds_off(self):
         behavior = self.make(pycozmo.explore_behaviors.BehaviorBringCubeToBeacon)
         behavior.last_failure = time.perf_counter()
