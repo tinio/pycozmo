@@ -53,7 +53,7 @@ class Angle:
     def __init__(self, radians: Optional[float] = None, degrees: Optional[float] = None):
         if radians is None and degrees is None:
             raise ValueError("Expected either the degrees or radians keyword argument")
-        if radians and degrees:
+        if radians is not None and degrees is not None:
             raise ValueError("Expected either the degrees or radians keyword argument, not both")
 
         if degrees is not None:
@@ -155,7 +155,7 @@ class Distance:
     def __init__(self, mm: Optional[float] = None, inches: Optional[float] = None):
         if mm is None and inches is None:
             raise ValueError("Expected either the mm or inches keyword argument")
-        if mm and inches:
+        if mm is not None and inches is not None:
             raise ValueError("Expected either the mm or inches keyword argument, not both")
 
         if inches is not None:

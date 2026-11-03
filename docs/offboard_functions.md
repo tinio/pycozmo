@@ -111,25 +111,29 @@ Behaviors are small programs over the robot's API, configured in `behaviors/`. T
 robot does when nothing has happened, in priority order: 14 sparks, which the application asked for, 3 severe-need
 activities, and the freeplay ones.
 
-PyCozmo implements 35 classes, 122 behaviors: the animation players, the reactions to being picked up, shaken, put on
-its side or on the charger, cliffs, cube moves, driving off the charger, pouncing on motion, expressing needs,
+PyCozmo implements all 76 classes, 178 behaviors: the animation players, the reactions to being picked up, shaken,
+put on its side or on the charger, cliffs, cube moves, driving off the charger, pouncing on motion, expressing needs,
 waiting, picking cubes up, putting them down, stacking them, working out with one, rolling one back upright, popping
-wheelies, singing, dancing, and asking for a game. Eleven of the reaction triggers are raised, a twelfth once faces
-are found. The activity engine runs freeplay as Anki's configuration says, with its scores, cooldowns and mood gates,
-and honours the unlock a behavior needs: `pycozmo.unlocks` reads those of a new robot and those the needs levels
-reward; nothing keeps a progression, so the robot is taken to have them all.
+wheelies, singing, dancing, asking for a game, pyramids and stacks, feeding, guarding, bouncing a cube, the hiking
+look-arounds and beacon/memory explorations, finding and following faces, and the dev/factory tests. Twelve of the
+reaction triggers are raised (a twelfth once faces are found); the rest wait on pet detection and game/engine states
+the activity engine does not reach. The activity engine runs freeplay as Anki's configuration says, with its scores,
+cooldowns and mood gates, and honours the unlock a behavior needs: `pycozmo.unlocks` reads those of a new robot and
+those the needs levels reward; nothing keeps a progression, so the robot is taken to have them all. Gating matches
+Anki's engine: `EarnedSparks` only wants the robot when sparks await celebration, `FireTruckAlarm` never takes the
+robot unasked, and explore behaviors hold back until beacons/cubes/ground justify them (see CHANGES.md).
 
-Missing classes, by what they need:
+Previously-missing classes, now implemented (by what they need):
 
 | Needs | Classes |
 |---|---|
-| Knocking a stack over: recorded on a robot, Anki's own behavior gave it up, and left nothing to go by | `KnockOverCubes` |
-| More handling of cubes | `RespondPossiblyRoll`, `CheckForStackAtInterval`, `CantHandleTallStack`, `ReactToStackOfCubes`, `BuildPyramid`, `BuildPyramidBase`, `ReactToPyramid`, `PyramidThankYou`, `BringCubeToBeacon`, `ThinkAboutBeacons`, `GuardDog`, `Bouncer`, `FeedingSearchForCube`, `FeedingEat`, `OnboardingShowCube` |
+| Cube stacks/pyramids | `KnockOverCubes`, `RespondPossiblyRoll`, `CheckForStackAtInterval`, `CantHandleTallStack`, `ReactToStackOfCubes`, `BuildPyramid`, `BuildPyramidBase`, `ReactToPyramid`, `PyramidThankYou` |
+| Cubes and beacon map | `BringCubeToBeacon`, `ThinkAboutBeacons`, `GuardDog`, `Bouncer`, `FeedingSearchForCube`, `FeedingEat`, `OnboardingShowCube` |
 | Faces | `FindFaces`, `SearchForFace`, `DriveToFace`, `InteractWithFaces`, `PeekABoo`, `PlayAnimWithFace`, `LookForFaceAndCube`, `EnrollFace`, `RespondToRenameFace` |
-| A map of the surroundings | `ExploreLookAroundInPlace`, `ExploreVisitPossibleMarker`, `VisitInterestingEdge`, `LookInPlaceMemoryMap` |
-| The application, whose code some tricks were: their moves are not in the resources | `EarnedSparks`, `OnConfigSeen`, `FireTruckAlarm` |
-| A laser pointer | `TrackLaser` |
-| An animation the resources lack | `ReactToMotorCalibration`, `ReactToPlacedOnSlope`, `ReactToReturnedToTreads` |
+| Hiking/exploration | `ExploreLookAroundInPlace`, `ExploreVisitPossibleMarker`, `VisitInterestingEdge`, `LookInPlaceMemoryMap` |
+| App-driven tricks | `EarnedSparks`, `OnConfigSeen`, `FireTruckAlarm` |
+| Laser pointer | `TrackLaser` |
+| Animations absent from resources | `ReactToMotorCalibration`, `ReactToPlacedOnSlope`, `ReactToReturnedToTreads` (implemented as quiet/steering reactions) |
 
 
 Vision

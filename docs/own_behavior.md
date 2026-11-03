@@ -142,11 +142,17 @@ part of its score and wins it back over time: `GuardDog` scores nothing for 5 mi
 an hour on, and the bored animations keep half their score for 9 seconds, which is what keeps the robot from playing
 two bored sequences in a row.
 
-What actually runs today is what needs no face to be looked for or driven to - a face that appears is only acknowledged:
-`DriveOffCharger`, the hiking intro, the `NothingToDo` idle and bored animations, `PounceOnMotion`, and with cubes the
-workout, stacking, rolling a cube back upright, popping wheelies, putting a carried cube down, asking for a game, and
-singing. An activity that wants the robot but can offer nothing is passed over rather than entered, since entering it
-would leave the robot still for as long as its duration - 25 s for `PlayAlone`, a minute for `Hiking`.
+What runs today covers all 76 classes: `DriveOffCharger`, the hiking intro, the `NothingToDo` idle and bored
+animations, `PounceOnMotion`, and with cubes the workout, stacking, rolling a cube back upright, popping wheelies,
+putting a carried cube down, asking for a game, singing, plus the restored face behaviors (`FindFaces`,
+`SearchForFace`, `DriveToFace`, `InteractWithFaces`, `PeekABoo`, `LookForFaceAndCube`, `EnrollFace`), the explore
+hiking behaviors (`LookAround`, beacon think/carry, edge/marker visits), pyramid/stack (`BuildPyramid`, `CantHandleTallStack`,
+`KnockOverCubes`, `RespondPossiblyRoll`), feeding, guard/bouncer/onboarding, and dev/factory tests. Gating is enforced:
+`EarnedSparks` holds back until sparks await, `FireTruckAlarm` never takes the robot unasked, and explore behaviors
+require beacons/cubes/ground (e.g. `ThinkAboutBeacons` needs new ground past `beaconRadius_mm`,
+`VisitInterestingEdge` a known usable cube). An activity that wants the robot but can offer nothing is still passed
+over rather than entered, since entering it would leave the robot still for as long as its duration - 25 s for
+`PlayAlone`, a minute for `Hiking`.
 
 
 Pouncing on motion

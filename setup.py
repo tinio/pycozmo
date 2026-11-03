@@ -64,6 +64,7 @@ setuptools.setup(
         "Intended Audience :: Education",
     ],
     scripts=[
+        "tools/pycozmo_anim.py",
         "tools/pycozmo_dump.py",
         "tools/pycozmo_replay.py",
         "tools/pycozmo_update.py",

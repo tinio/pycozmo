@@ -322,7 +322,7 @@ Bug fixes:
 
 Documentation:
 - The README is a front page again, at half its length: what the robot does, needs, sees and hears, which had grown
-    into 330 lines of notes, is in docs/own_behavior.md, sound.md, vision.md and cubes.md, and the Sphinx documentation
+    into 330 lines of notes, is in docs/own_behavior.md, sound.md, vision.md and cubes_and_games.md, and the Sphinx documentation
     lists them. What the README said wrongly is corrected: the requirements (Pillow was 6.0.0 and NumPy was missing),
     the tools and examples it did not list, the severe-need activities it said never run, and ideas and bug reports,
     which it sent upstream. Links that no longer lead anywhere are gone - the DDL Discord invite, Anki's website, an

@@ -26,10 +26,15 @@ pycozmo package
     pycozmo.camera
     pycozmo.client
     pycozmo.conn
+    pycozmo.charger
+    pycozmo.charger_behaviors
+    pycozmo.charger_detection
+    pycozmo.charger_handling
     pycozmo.cube_behaviors
     pycozmo.cube_handling
     pycozmo.cube_lights
     pycozmo.cubes
+    pycozmo.dev_behaviors
     pycozmo.emotions
     pycozmo.event
     pycozmo.exception
@@ -37,8 +42,12 @@ pycozmo package
     pycozmo.faces
     pycozmo.filter
     pycozmo.frame
+    pycozmo.explore_behaviors
+    pycozmo.face_behaviors
+    pycozmo.feeding_behaviors
     pycozmo.game_behaviors
     pycozmo.image_encoder
+    pycozmo.interactive_behaviors
     pycozmo.json_loader
     pycozmo.keep_away
     pycozmo.lights

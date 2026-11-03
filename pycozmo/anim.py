@@ -4,6 +4,7 @@ Animation clip representation, reading, and preprocessing.
 
 """
 
+import functools
 import glob
 import math
 import os
@@ -279,6 +280,7 @@ class PreprocessedClip(object):
                 singing[switch_id] = placed
 
 
+@functools.lru_cache(maxsize=32)
 def load_face_animation(directory: str) -> List[protocol_encoder.DisplayImage]:
     """
     Read a face animation: a directory of PNG images, one per animation frame, in name order.

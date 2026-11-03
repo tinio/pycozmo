@@ -177,7 +177,7 @@ STATUS_EVENTS = {
     robot.RobotStatusFlag.LIFT_IN_POS: EvtRobotLiftInPositionChange,
     robot.RobotStatusFlag.HEAD_IN_POS: EvtRobotHeadInPositionChange,
     robot.RobotStatusFlag.IS_ANIM_BUFFER_FULL: EvtRobotAnimBufferFullChange,
-    robot.RobotStatusFlag.IS_ANIMATING_IDLE: EvtRobotAnimatingChange,
+    robot.RobotStatusFlag.IS_ANIMATING_IDLE: EvtRobotAnimatingIdleChange,
     robot.RobotStatusFlag.IS_ON_CHARGER: EvtRobotOnChargerChange,
     robot.RobotStatusFlag.IS_CHARGING: EvtRobotChargingChange,
     robot.RobotStatusFlag.CLIFF_DETECTED: EvtCliffDetectedChange,
@@ -296,13 +296,14 @@ class Dispatcher(object):
             any(child.listens_to(event) for child in list(self.dispatch_children))
 
     def dispatch(self, event, *args, **kwargs):
-        # Dispatch to handlers.
-        handlers = []
-        for i, handler in enumerate(self.dispatch_handlers[event]):
+        # Dispatch to handlers. Copy before mutating to avoid skipping subsequent one_shot handlers.
+        handlers = list(self.dispatch_handlers[event])
+        for handler in handlers:
             if handler.one_shot:
-                # Delete one-shot handlers prior to actual dispatch
-                del self.dispatch_handlers[event][i]
-            handlers.append(handler)
+                try:
+                    self.dispatch_handlers[event].remove(handler)
+                except ValueError:
+                    pass
         for handler in handlers:
             handler.f(*args, **kwargs)
         # Dispatch to child dispatchers.
