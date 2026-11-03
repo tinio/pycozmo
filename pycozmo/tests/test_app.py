@@ -71,6 +71,7 @@ class TestArguments(unittest.TestCase):
         self.assertIsNone(args.robot_addr, "the library default is left alone")
         self.assertFalse(args.no_face)
         self.assertFalse(args.verbose)
+        self.assertIsNone(args.charger_memory)
 
     def test_robot_addr(self):
         self.assertEqual(self.parse(["--robot-addr", "127.0.0.1:41754"]).robot_addr,
@@ -82,3 +83,7 @@ class TestArguments(unittest.TestCase):
 
     def test_verbose(self):
         self.assertTrue(self.parse(["-v"]).verbose)
+
+    def test_charger_memory(self):
+        self.assertEqual(self.parse(["--charger-memory", "/tmp/charger.json"]).charger_memory,
+                         "/tmp/charger.json")

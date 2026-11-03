@@ -34,6 +34,9 @@ def parse_args():
     parser.add_argument(
         "--no-face", action="store_true",
         help="do not draw the procedural face, which redraws the screen 30 times a second")
+    parser.add_argument(
+        "--charger-memory", metavar="PATH", default=None,
+        help="remember the charger in PATH across runs, so the robot goes back to it")
     args = parser.parse_args()
     return args
 
@@ -52,7 +55,8 @@ def main():
                 log_level="DEBUG" if args.verbose else "INFO",
                 protocol_log_level="INFO",
                 robot_log_level="INFO",
-                enable_procedural_face=not args.no_face) as cli:
+                enable_procedural_face=not args.no_face,
+                charger_memory=args.charger_memory) as cli:
             brain = pycozmo.brain.Brain(cli)
             cli.add_handler(pycozmo.event.EvtConnectionLost, lambda *args: lost.set())
             brain.start()
