@@ -3,8 +3,10 @@ import os
 import time
 import unittest
 from typing import Dict, List, Set, cast
+from unittest import mock
 
 import pycozmo
+import pycozmo.explore_behaviors
 import pycozmo.face_behaviors
 
 
@@ -65,6 +67,14 @@ class FakeClient(pycozmo.event.Dispatcher):
         "ComeHere_AlreadyHere",
         "ComeHere_SearchForFace_FoundFace",
         "MeetCozmoFirstEnrollmentCelebration",
+        "HikingReactToNewArea",
+        "HikingObserve",
+        "HikingSquintStart",
+        "HikingSquintEnd",
+        "HikingInterestingEdgeThought",
+        "HikingLookAround",
+        "LookInPlaceForFacesBodyPause",
+        "LookInPlaceForFacesHeadMovePause",
     )
 
     def __init__(self):
@@ -126,6 +136,14 @@ class FakeClient(pycozmo.event.Dispatcher):
         for face in self.faces.visible():
             face.distance = max(0.0, face.distance - distance.mm)
         return True
+
+    def go_to_pose(self, pose, relative_to_robot=False, wait=True, timeout=None):
+        self.drives.append("pose")
+        self.pose = pose
+        return True
+
+    def set_lift_height(self, height, *args, **kwargs):
+        self.head_angles.append(("lift", height))
 
 
 class FakeFaces:
@@ -578,7 +596,7 @@ class TestGetBehaviorClassFromDict(unittest.TestCase):
 
     def test_unknown_class_falls_back(self):
         # Classes the resources name but nothing implements yet, and names nothing does.
-        for behavior_class in ("Bouncer", "GuardDog", "ThinkAboutBeacons", "NoSuchBehaviorClass"):
+        for behavior_class in ("Bouncer", "GuardDog", "TrackLaser", "NoSuchBehaviorClass"):
             with self.subTest(behavior_class=behavior_class):
                 self.assertIs(
                     pycozmo.behavior.get_behavior_class_from_dict({"behaviorClass": behavior_class}),
@@ -686,15 +704,12 @@ class TestAgainstCozmoAssets(unittest.TestCase):
     #: Behavior classes in the resources with no implementation yet.
     EXPECTED_UNMAPPED = frozenset({
         "Bouncer",
-        "BringCubeToBeacon",
         "BuildPyramid",
         "BuildPyramidBase",
         "CantHandleTallStack",
         "CheckForStackAtInterval",
         "DevTurnInPlaceTest",
         "DockingTestSimple",
-        "ExploreLookAroundInPlace",
-        "ExploreVisitPossibleMarker",
         "FactoryCentroidExtractor",
         "FactoryTest",
         "FeedingEat",
@@ -703,12 +718,9 @@ class TestAgainstCozmoAssets(unittest.TestCase):
         "GuardDog",
         "KnockOverCubes",
         "LiftLoadTest",
-        "LookInPlaceMemoryMap",
         "OnboardingShowCube",
         "RespondPossiblyRoll",
-        "ThinkAboutBeacons",
         "TrackLaser",
-        "VisitInterestingEdge",
     })
 
     def test_every_reaction_trigger_has_a_behavior(self):
@@ -975,6 +987,161 @@ class TestBehaviorLookForFaceAndCube(BehaviorTestCase):
         behavior.activate()
         self.assertTrue(complete_until_done(self, self.cli, timeout=10.0))
         self.assertEqual(len(self.cli.turns), 4)
+
+
+class TestBehaviorThinkAboutBeacons(BehaviorTestCase):
+    """ New ground is remembered as a beacon area, with the new-area animation. """
+
+    CONF = {"params": {"beaconRadius_mm": 175.0, "newAreaAnimTrigger": "HikingReactToNewArea"}}
+
+    def test_new_ground_is_remembered(self):
+        from pycozmo.explore_behaviors import beacons_for
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorThinkAboutBeacons, self.CONF)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli))
+        areas = beacons_for(self.cli).areas
+        self.assertEqual(len(areas), 1)
+        self.assertEqual(self.cli.played, ["HikingReactToNewArea"])
+
+    def test_known_ground_is_quiet(self):
+        from pycozmo.explore_behaviors import beacons_for
+        beacons_for(self.cli).areas.append((0.0, 0.0, 175.0))
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorThinkAboutBeacons, self.CONF)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=3.0))
+        self.assertEqual(self.cli.played, [])
+
+
+class TestBehaviorBringCubeToBeacon(BehaviorTestCase):
+    """ Carried cubes ride to the nearest beacon; others are picked up first. """
+
+    def seed_beacon(self):
+        from pycozmo.explore_behaviors import beacons_for
+        beacons_for(self.cli).areas.append((300.0, 0.0, 175.0))
+
+    def test_carried_cube_rides_to_the_beacon(self):
+        self.cli.cubes = mock.Mock(carried=mock.Mock())
+        self.seed_beacon()
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorBringCubeToBeacon)
+        with mock.patch("pycozmo.cube_handling.put_down_cube", return_value=True) as put_down:
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli))
+        put_down.assert_called_once()
+        self.assertIn("pose", self.cli.drives)
+
+    def test_loose_cube_is_picked_up_first(self):
+        self.cli.cubes = mock.Mock(carried=None)
+        self.seed_beacon()
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorBringCubeToBeacon)
+        with mock.patch("pycozmo.explore_behaviors.usable_cubes", return_value=[mock.Mock()]), \
+                mock.patch("pycozmo.cube_handling.pick_up_cube", return_value=True) as pick_up, \
+                mock.patch("pycozmo.cube_handling.put_down_cube", return_value=True):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli))
+        pick_up.assert_called_once()
+
+    def test_no_beacon_gives_up(self):
+        self.cli.cubes = mock.Mock(carried=mock.Mock())
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorBringCubeToBeacon)
+        with mock.patch("pycozmo.cube_handling.put_down_cube") as put_down:
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=3.0))
+        put_down.assert_not_called()
+        self.assertNotIn("pose", self.cli.drives)
+
+    def test_recent_failure_holds_off(self):
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorBringCubeToBeacon)
+        behavior.last_failure = time.perf_counter()
+        self.assertFalse(behavior.wants_to_run())
+
+
+class TestBehaviorVisitInterestingEdge(BehaviorTestCase):
+    """ Squints, edges closer, and has a proper look. """
+
+    def test_looks_at_the_edge(self):
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorVisitInterestingEdge)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli))
+        self.assertEqual(self.cli.played,
+                         ["HikingSquintStart", "HikingObserve", "HikingSquintEnd"])
+        self.assertTrue(self.cli.drives)
+
+    def test_blocked_drive_means_no_edge(self):
+        behavior = self.make(
+            pycozmo.explore_behaviors.BehaviorVisitInterestingEdge,
+            {"params": {"edgesNotFoundAnimTrigger": "HikingInterestingEdgeThought",
+                        "squintStartAnimTrigger": "HikingSquintStart"}})
+        with mock.patch.object(self.cli, "drive_straight", return_value=False):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli))
+        self.assertEqual(self.cli.played,
+                         ["HikingSquintStart", "HikingInterestingEdgeThought"])
+
+
+class TestBehaviorExploreVisitPossibleMarker(BehaviorTestCase):
+    """ Drives to within looking distance of something half-seen. """
+
+    def test_drives_out_to_a_cube(self):
+        cube = mock.Mock()
+        cube.pose = mock.Mock(x=500.0, y=0.0)
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorExploreVisitPossibleMarker)
+        with mock.patch("pycozmo.explore_behaviors.usable_cubes", return_value=[cube]):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=5.0))
+        self.assertIn("pose", self.cli.drives)
+
+    def test_close_enough_stays_put(self):
+        cube = mock.Mock()
+        cube.pose = mock.Mock(x=100.0, y=0.0)
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorExploreVisitPossibleMarker)
+        with mock.patch("pycozmo.explore_behaviors.usable_cubes", return_value=[cube]):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=3.0))
+        self.assertNotIn("pose", self.cli.drives)
+
+    def test_nothing_known_gives_up(self):
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorExploreVisitPossibleMarker)
+        with mock.patch("pycozmo.explore_behaviors.usable_cubes", return_value=[]):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=3.0))
+        self.assertNotIn("pose", self.cli.drives)
+
+
+class TestBehaviorLookAround(BehaviorTestCase):
+    """ The staged scan turns right round and pauses on the wait trigger. """
+
+    CONF = {"params": {
+        "behavior_NumberOfScansBeforeStop": 1,
+        "behavior_CanCarryCube": True,
+        "s0_MainTurnCWChance": 1.0,
+        "sx_BodyTurnSpeed_degPerSec": 120.0,
+        "s1_BodyAngleRangeMin_deg": 30.0,
+        "s1_BodyAngleRangeMax_deg": 30.0,
+        "s1_HeadAngleRangeMin_deg": 0.0,
+        "s1_HeadAngleRangeMax_deg": 0.0,
+        "s2_WaitMin_sec": 0.01,
+        "s2_WaitMax_sec": 0.01,
+        "s2_WaitAnimTrigger": "LookInPlaceForFacesBodyPause",
+        "s4_HeadAngleChangesMin": 1,
+        "s4_HeadAngleChangesMax": 1,
+        "s4_WaitBetweenChangesMin_sec": 0.01,
+        "s4_WaitBetweenChangesMax_sec": 0.01,
+        "s4_WaitAnimTrigger": "LookInPlaceForFacesHeadMovePause",
+    }}
+
+    def test_scan_turns_full_circle(self):
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorExploreLookAroundInPlace, self.CONF)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=15.0))
+        self.assertEqual(len(self.cli.turns), 12)
+        self.assertEqual(self.cli.camera, [(True, False)])
+        self.assertIn("LookInPlaceForFacesBodyPause", self.cli.played)
+
+    def test_memory_map_scan_uses_its_own_params(self):
+        behavior = self.make(pycozmo.explore_behaviors.BehaviorLookInPlaceMemoryMap, self.CONF)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=15.0))
+        self.assertEqual(len(self.cli.turns), 12)
 
 
 class TestEmotionEvents(BehaviorTestCase):

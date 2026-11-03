@@ -1145,8 +1145,8 @@ def get_behavior_class_from_dict(data):
         "RespondToRenameFace": BehaviorRespondToRenameFace,
         "PlayAnimWithFace": BehaviorPlayAnimWithFace,
     }
-    # The cube handling, game, song and face behaviors build on this module, so they join the map here.
-    from . import cube_behaviors, face_behaviors, game_behaviors, song_behaviors
+    # The cube handling, game, song, face and explore behaviors build on this module, so they join the map here.
+    from . import cube_behaviors, explore_behaviors, face_behaviors, game_behaviors, song_behaviors
     class_map.update({
         "Singing": song_behaviors.BehaviorSinging,
         "Dance": song_behaviors.BehaviorDance,
@@ -1165,6 +1165,12 @@ def get_behavior_class_from_dict(data):
         "InteractWithFaces": face_behaviors.BehaviorInteractWithFaces,
         "PeekABoo": face_behaviors.BehaviorPeekABoo,
         "LookForFaceAndCube": face_behaviors.BehaviorLookForFaceAndCube,
+        "ExploreLookAroundInPlace": explore_behaviors.BehaviorExploreLookAroundInPlace,
+        "LookInPlaceMemoryMap": explore_behaviors.BehaviorLookInPlaceMemoryMap,
+        "ThinkAboutBeacons": explore_behaviors.BehaviorThinkAboutBeacons,
+        "BringCubeToBeacon": explore_behaviors.BehaviorBringCubeToBeacon,
+        "VisitInterestingEdge": explore_behaviors.BehaviorVisitInterestingEdge,
+        "ExploreVisitPossibleMarker": explore_behaviors.BehaviorExploreVisitPossibleMarker,
     })
     cls = class_map.get(data["behaviorClass"], Behavior)
     return cls
