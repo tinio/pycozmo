@@ -180,6 +180,35 @@ class BehaviorScript(behavior.Behavior):
         self.play("ReactToBlockRetryPickup", cancel)
         return False
 
+    def _no_cube_fallback(self, cancel: threading.Event) -> None:
+        """ Best-effort visible behavior when activated with no usable cube.
+
+        The brain still gates these behaviors on usable_cubes, but a direct
+        activation (or a future activity that drops the gate) should remain
+        observable without hardware: enable the camera, turn a little to
+        search, and play a frustration/search animation if one is available.
+        """
+        try:
+            self.cli.enable_camera(True, color=False)
+        except Exception:
+            pass
+        # Small search turn - observable even without cubes or animation.
+        try:
+            if hasattr(self.cli, "turn_in_place"):
+                self.cli.turn_in_place(util.Angle(degrees=30.0), wait=True)
+                _check(cancel)
+        except Exception:
+            pass
+        # Try a few plausible fallback triggers; play the first that exists.
+        for trigger in ("ReactToBlockRetryPickup", "Frustrated", "FrustrationSmall",
+                        "SearchForBlock", "OnboardingCubeDockFail", "LookAround"):
+            try:
+                if trigger in getattr(self.cli, "animation_groups", {}) or {}:
+                    if self.play(trigger, cancel):
+                        break
+            except Exception:
+                continue
+
 
 class BehaviorPutDownBlock(BehaviorScript):
     """ PutDownBlock - set down the cube in the lift. """
@@ -202,6 +231,8 @@ class BehaviorPickUpCube(BehaviorScript):
         if cubes and self.pick_up(cubes[0], cancel):
             self.play("ReactToBlockPickupSuccess", cancel)
             self.need_action()
+        elif not cubes:
+            self._no_cube_fallback(cancel)
 
 
 class BehaviorPickUpAndPutDownCube(BehaviorPickUpCube):
@@ -213,6 +244,8 @@ class BehaviorPickUpAndPutDownCube(BehaviorPickUpCube):
             self.play("ReactToBlockPickupSuccess", cancel)
             cube_handling.put_down_cube(self.cli, cancel=cancel)
             self.need_action()
+        elif not cubes:
+            self._no_cube_fallback(cancel)
 
 
 class Workout:
@@ -281,6 +314,8 @@ class BehaviorCubeLiftWorkout(BehaviorScript):
     def script(self, cancel: threading.Event) -> None:
         cubes = usable_cubes(self.cli)
         if not cubes or not self.pick_up(cubes[0], cancel):
+            if not cubes:
+                self._no_cube_fallback(cancel)
             return
         workout = self.workout()
         for trigger in [workout.pre_lift] + workout.lifts(self.get_mood()) + [workout.post_lift]:
@@ -302,6 +337,8 @@ class BehaviorStackBlocks(BehaviorScript):
     def script(self, cancel: threading.Event) -> None:
         cubes = usable_cubes(self.cli)
         if len(cubes) < 2:
+            if not cubes:
+                self._no_cube_fallback(cancel)
             return
         top, bottom = cubes[0], cubes[1]
         if not self.pick_up(top, cancel):
@@ -345,6 +382,7 @@ class BehaviorRollBlock(BehaviorScript):
     def script(self, cancel: threading.Event) -> None:
         cubes = self.candidates()
         if not cubes:
+            self._no_cube_fallback(cancel)
             return
         cube = cubes[0]
         self.play("RollBlockInitial", cancel)
@@ -400,6 +438,7 @@ class BehaviorPopAWheelie(BehaviorScript):
     def script(self, cancel: threading.Event) -> None:
         cubes = usable_cubes(self.cli) or cubes_on_their_side(self.cli)
         if not cubes:
+            self._no_cube_fallback(cancel)
             return
         self.play("PopAWheelieInitial", cancel)
         if cube_handling.pop_a_wheelie(self.cli, cubes[0], cancel=cancel):
@@ -637,6 +676,8 @@ class BehaviorKnockOverCubes(BehaviorScript):
         stack = _tallest_stack(self.cli, self.minimum)
         cubes = usable_cubes(self.cli)
         if stack is None or not cubes:
+            if not cubes:
+                self._no_cube_fallback(cancel)
             return
         before = {}
         for cube in stack:
@@ -689,6 +730,7 @@ class BehaviorRespondPossiblyRoll(BehaviorScript):
                    key=lambda cube: math.hypot(cube.pose.x - x, cube.pose.y - y),
                    default=None)
         if cube is None:
+            self._no_cube_fallback(cancel)
             return
         if cube.up_axis in (None, UpAxis.ZPositive):
             self.play("BuildPyramidFirstBlockUpright", cancel)
