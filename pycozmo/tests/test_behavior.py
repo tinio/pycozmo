@@ -75,6 +75,19 @@ class FakeClient(pycozmo.event.Dispatcher):
         "HikingLookAround",
         "LookInPlaceForFacesBodyPause",
         "LookInPlaceForFacesHeadMovePause",
+        "BuildPyramidFirstBlockUpright",
+        "BuildPyramidFirstBlockOnSide",
+        "BuildPyramidSecondBlockUpright",
+        "BuildPyramidSecondBlockOnSide",
+        "BuildPyramidThirdBlockUpright",
+        "BuildPyramidThirdBlockOnSide",
+        "BuildPyramidSuccess",
+        "CantHandleTallStack",
+        "KnockOverGrabAttempt",
+        "KnockOverEyes",
+        "KnockOverSuccess",
+        "KnockOverFailure",
+        "PutDownBlockPutDown",
     )
 
     def __init__(self):
@@ -91,6 +104,7 @@ class FakeClient(pycozmo.event.Dispatcher):
         self.pose = pycozmo.util.Pose(
             0.0, 0.0, 0.0, angle_z=pycozmo.util.Angle(radians=0.0))
         self.faces = FakeFaces()
+        self.cubes = FakeCubes()
         self.camera = []
         self.turns = []
         self.drives = []
@@ -144,6 +158,23 @@ class FakeClient(pycozmo.event.Dispatcher):
 
     def set_lift_height(self, height, *args, **kwargs):
         self.head_angles.append(("lift", height))
+
+
+class FakeCubes(list):
+    """ Stands in for Cubes, holding a fixed set of cubes. """
+
+    def __init__(self, cubes=()):
+        super().__init__(cubes)
+        self.carried = None
+
+
+def make_cube(x=200.0, y=0.0, z=22.5, up_axis=None, connected=True):
+    """ A cube the robot knows, upright on the ground unless told otherwise. """
+    cube = mock.Mock()
+    cube.pose = mock.Mock(x=x, y=y, z=z)
+    cube.up_axis = up_axis
+    cube.connected = connected
+    return cube
 
 
 class FakeFaces:
@@ -704,10 +735,6 @@ class TestAgainstCozmoAssets(unittest.TestCase):
     #: Behavior classes in the resources with no implementation yet.
     EXPECTED_UNMAPPED = frozenset({
         "Bouncer",
-        "BuildPyramid",
-        "BuildPyramidBase",
-        "CantHandleTallStack",
-        "CheckForStackAtInterval",
         "DevTurnInPlaceTest",
         "DockingTestSimple",
         "FactoryCentroidExtractor",
@@ -716,10 +743,8 @@ class TestAgainstCozmoAssets(unittest.TestCase):
         "FeedingSearchForCube",
         "FireTruckAlarm",
         "GuardDog",
-        "KnockOverCubes",
         "LiftLoadTest",
         "OnboardingShowCube",
-        "RespondPossiblyRoll",
         "TrackLaser",
     })
 
@@ -1142,6 +1167,162 @@ class TestBehaviorLookAround(BehaviorTestCase):
         behavior.activate()
         self.assertTrue(complete_until_done(self, self.cli, timeout=15.0))
         self.assertEqual(len(self.cli.turns), 12)
+
+
+class TestBehaviorBuildPyramidBase(BehaviorTestCase):
+    """ Lays two blocks side by side, reacting happy to each upright one. """
+
+    def test_lays_two_blocks(self):
+        self.cli.cubes = FakeCubes([make_cube(x=200.0), make_cube(x=400.0), make_cube(x=600.0)])
+        behavior = self.make(pycozmo.cube_behaviors.BehaviorBuildPyramidBase)
+        with mock.patch("pycozmo.cube_handling.pick_up_cube", return_value=True), \
+                mock.patch("pycozmo.cube_handling.put_down_cube", return_value=True):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=20.0))
+        self.assertEqual(self.cli.played,
+                         ["BuildPyramidFirstBlockUpright", "BuildPyramidSecondBlockUpright"])
+
+
+class TestBehaviorBuildPyramid(BehaviorTestCase):
+    """ Lays the base, lifts a third block on top, and celebrates. """
+
+    def test_builds_all_the_way_up(self):
+        self.cli.cubes = FakeCubes([make_cube(x=200.0), make_cube(x=400.0), make_cube(x=600.0)])
+        behavior = self.make(pycozmo.cube_behaviors.BehaviorBuildPyramid)
+        with mock.patch("pycozmo.cube_handling.pick_up_cube", return_value=True), \
+                mock.patch("pycozmo.cube_handling.put_down_cube", return_value=True), \
+                mock.patch("pycozmo.cube_handling.place_on_cube", return_value=True):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=20.0))
+        self.assertEqual(self.cli.played,
+                         ["BuildPyramidFirstBlockUpright", "BuildPyramidSecondBlockUpright",
+                          "BuildPyramidSuccess"])
+
+
+class TestBehaviorCantHandleTallStack(BehaviorTestCase):
+    """ Looks a tall stack over, sadly - unless it moves first. """
+
+    def stack(self):
+        self.cli.cubes = FakeCubes([make_cube(x=200.0, z=22.5),
+                                    make_cube(x=200.0, z=67.5),
+                                    make_cube(x=200.0, z=112.5)])
+
+    def test_looks_then_sighs(self):
+        self.stack()
+        behavior = self.make(pycozmo.cube_behaviors.BehaviorCantHandleTallStack)
+        self.assertTrue(behavior.wants_to_run())
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=20.0))
+        self.assertEqual(self.cli.played, ["CantHandleTallStack"])
+        self.assertTrue(self.cli.head_angles)
+
+    def test_a_stack_coming_down_is_left_alone(self):
+        self.stack()
+        behavior = self.make(pycozmo.cube_behaviors.BehaviorCantHandleTallStack)
+        behavior.activate()
+        time.sleep(2.2)
+        self.cli.cubes[2].pose = mock.Mock(x=260.0, y=0.0, z=22.5)
+        self.assertTrue(complete_until_done(self, self.cli, timeout=20.0))
+        self.assertEqual(self.cli.played, [])
+
+    def test_no_stack_nothing_to_handle(self):
+        behavior = self.make(pycozmo.cube_behaviors.BehaviorCantHandleTallStack)
+        self.assertFalse(behavior.wants_to_run())
+
+
+class TestBehaviorCheckForStackAtInterval(BehaviorTestCase):
+    """ A stack found gets acknowledged; nothing found ends quietly. """
+
+    def test_stack_found_gets_acknowledged(self):
+        self.cli.cubes = FakeCubes([make_cube(x=200.0, z=22.5),
+                                    make_cube(x=200.0, z=67.5),
+                                    make_cube(x=200.0, z=112.5)])
+        behavior = self.make(pycozmo.cube_behaviors.BehaviorCheckForStackAtInterval)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli))
+        self.assertEqual(self.cli.played, ["AcknowledgeObject"])
+
+    def test_no_stack_ends_quietly(self):
+        self.cli.cubes = FakeCubes([make_cube(x=200.0)])
+        behavior = self.make(pycozmo.cube_behaviors.BehaviorCheckForStackAtInterval)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli, timeout=3.0))
+        self.assertEqual(self.cli.played, [])
+
+
+class TestBehaviorKnockOverCubes(BehaviorTestCase):
+    """ Grabs a block, rams the stack, and tells success from failure by movement. """
+
+    CONF = {"minimumStackHeight": 3,
+            "reachForBlockTrigger": "KnockOverGrabAttempt",
+            "knockOverEyesTrigger": "KnockOverEyes",
+            "knockOverSuccessTrigger": "KnockOverSuccess",
+            "knockOverFailureTrigger": "KnockOverFailure",
+            "knockOverPutDownTrigger": "PutDownBlockPutDown"}
+
+    def setup_stack(self):
+        self.cli.cubes = FakeCubes([make_cube(x=100.0),
+                                    make_cube(x=300.0, z=22.5),
+                                    make_cube(x=300.0, z=67.5),
+                                    make_cube(x=300.0, z=112.5)])
+
+    def test_knocked_stack_celebrates(self):
+        self.setup_stack()
+        top = self.cli.cubes[3]
+        behavior = self.make(pycozmo.cube_behaviors.BehaviorKnockOverCubes, self.CONF)
+        self.assertTrue(behavior.wants_to_run())
+        real_drive = self.cli.drive_straight
+
+        def ram(distance, speed=100.0, wait=True, timeout=None):
+            top.pose = mock.Mock(x=360.0, y=0.0, z=22.5)
+            return real_drive(distance, speed, wait=wait, timeout=timeout)
+
+        with mock.patch("pycozmo.cube_handling.pick_up_cube", return_value=True), \
+                mock.patch.object(self.cli, "drive_straight", side_effect=ram):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=20.0))
+        self.assertEqual(self.cli.played,
+                         ["KnockOverGrabAttempt", "KnockOverEyes", "KnockOverSuccess",
+                          "PutDownBlockPutDown"])
+
+    def test_standing_stack_commiserates(self):
+        self.setup_stack()
+        behavior = self.make(pycozmo.cube_behaviors.BehaviorKnockOverCubes, self.CONF)
+        with mock.patch("pycozmo.cube_handling.pick_up_cube", return_value=True):
+            behavior.activate()
+            self.assertTrue(complete_until_done(self, self.cli, timeout=20.0))
+        self.assertEqual(self.cli.played,
+                         ["KnockOverGrabAttempt", "KnockOverEyes", "KnockOverFailure",
+                          "PutDownBlockPutDown"])
+
+    def test_no_stack_nothing_to_knock(self):
+        self.cli.cubes = FakeCubes([make_cube(x=100.0)])
+        behavior = self.make(pycozmo.cube_behaviors.BehaviorKnockOverCubes)
+        self.assertFalse(behavior.wants_to_run())
+
+
+class TestBehaviorRespondPossiblyRoll(BehaviorTestCase):
+    """ An upright block gets the happy answer, a rolled one the frustrated one. """
+
+    def test_upright_block_gets_the_happy_answer(self):
+        self.cli.cubes = FakeCubes([make_cube(x=200.0)])
+        behavior = self.make(pycozmo.cube_behaviors.BehaviorRespondPossiblyRoll)
+        self.assertTrue(behavior.wants_to_run())
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli))
+        self.assertEqual(self.cli.played, ["BuildPyramidFirstBlockUpright"])
+
+    def test_rolled_block_gets_the_frustrated_answer(self):
+        self.cli.cubes = FakeCubes([make_cube(
+            x=200.0, up_axis=pycozmo.protocol_encoder.UpAxis.XPositive)])
+        behavior = self.make(pycozmo.cube_behaviors.BehaviorRespondPossiblyRoll)
+        behavior.activate()
+        self.assertTrue(complete_until_done(self, self.cli))
+        self.assertEqual(self.cli.played, ["BuildPyramidFirstBlockOnSide"])
+
+    def test_nothing_known_nothing_to_say(self):
+        behavior = self.make(pycozmo.cube_behaviors.BehaviorRespondPossiblyRoll)
+        self.assertFalse(behavior.wants_to_run())
 
 
 class TestEmotionEvents(BehaviorTestCase):

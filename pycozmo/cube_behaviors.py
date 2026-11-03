@@ -12,6 +12,7 @@ script between steps and stops the motors.
 
 """
 
+import math
 import os
 import threading
 import time
@@ -23,7 +24,7 @@ from . import cube_handling
 from . import event
 from . import robot
 from . import util
-from .cube_handling import Cancelled
+from .cube_handling import Cancelled, _check, _wrap
 from .cubes import CUBE_SIDE, LightCube
 from .json_loader import load_json_file
 from .logger import logger
@@ -408,3 +409,288 @@ class BehaviorPopAWheelie(BehaviorScript):
         else:
             self.lower_lift(cancel)
             self.play("PopAWheelieRetry", cancel)
+
+
+def _stack_groups(cubes: List[LightCube]) -> List[List[LightCube]]:
+    """ Cubes piled near each other, each group nearest the robot's notion of together. """
+    groups: List[List[LightCube]] = []
+    for cube in cubes:
+        if cube.pose is None:
+            continue
+        for group in groups:
+            first = group[0]
+            if first.pose is not None and math.hypot(first.pose.x - cube.pose.x,
+                                                     first.pose.y - cube.pose.y) < CUBE_SIDE:
+                group.append(cube)
+                break
+        else:
+            groups.append([cube])
+    return groups
+
+
+def _tallest_stack(cli: Any, minimum: int) -> Optional[List[LightCube]]:
+    """ The tallest pile of cubes, bottom first, if it reaches the minimum height. """
+    known = [cube for cube in cli.cubes if cube.pose is not None]
+    stacks = [sorted(group, key=lambda cube: cube.pose.z if cube.pose is not None else 0.0)
+              for group in _stack_groups(known) if len(group) >= minimum]
+    if not stacks:
+        return None
+    return max(stacks, key=len)
+
+
+class BehaviorBuildPyramidBase(BehaviorScript):
+    """
+    BuildPyramidBase - lay the two-cube base of a pyramid.
+
+    Picks cubes up one at a time and sets each down beside the last, reacting
+    happy to an upright block and frustrated to one on its side. The full
+    pyramid goes on top in BuildPyramid.
+    """
+
+    #: How many blocks the base takes, and how far apart their middles land, in mm.
+    BLOCKS = 2
+    SPACING = CUBE_SIDE + 10.0
+    ORDINALS = ("First", "Second", "Third")
+
+    def wants_to_run(self) -> bool:
+        return self.cli.cubes.carried is None and bool(usable_cubes(self.cli))
+
+    def _react(self, upright: bool, placed: int, cancel: threading.Event) -> None:
+        ordinal = self.ORDINALS[min(placed, len(self.ORDINALS) - 1)]
+        side = "Upright" if upright else "OnSide"
+        self.play("BuildPyramid{}Block{}".format(ordinal, side), cancel)
+
+    def script(self, cancel: threading.Event) -> None:
+        if self._lay_base(cancel):
+            self.need_action()
+
+    def _lay_base(self, cancel: threading.Event) -> bool:
+        """ Lay the base blocks, reacting to each; say whether all of them went down. """
+        anchor = None
+        placed = 0
+        misses = 0
+        while placed < self.BLOCKS:
+            _check(cancel)
+            cubes = usable_cubes(self.cli)
+            if not cubes:
+                return False
+            if not self.pick_up(cubes[0], cancel):
+                misses += 1
+                if misses >= 2:
+                    self.give_up("could not pick a block up")
+                    return False
+                continue
+            if anchor is not None:
+                dx = anchor[0] - self.cli.pose.position.x
+                dy = anchor[1] - self.cli.pose.position.y
+                heading = self.cli.pose.rotation.angle_z.radians
+                self.cli.turn_in_place(util.Angle(radians=_wrap(math.atan2(dy, dx) - heading)),
+                                       wait=True)
+                _check(cancel)
+                across = anchor[0] + placed * self.SPACING
+                pose = util.Pose(across, anchor[1], 0.0, angle_z=util.Angle(radians=0.0))
+                if not self.cli.go_to_pose(pose, wait=True):
+                    cube_handling.put_down_cube(self.cli, cancel=cancel)
+                    self.give_up("could not get the block there")
+                    return False
+            if not cube_handling.put_down_cube(self.cli, cancel=cancel):
+                self.give_up("could not put the block down")
+                return False
+            cube = min((cube for cube in self.cli.cubes if cube.pose is not None),
+                       key=lambda cube: math.hypot(cube.pose.x - self.cli.pose.position.x,
+                                                   cube.pose.y - self.cli.pose.position.y),
+                       default=None)
+            upright = cube is None or cube.up_axis in (None, UpAxis.ZPositive)
+            x, y = self.cli.pose.position.x, self.cli.pose.position.y
+            if anchor is None:
+                anchor = (x, y)
+            self._react(upright, placed, cancel)
+            placed += 1
+        return True
+
+
+class BehaviorBuildPyramid(BehaviorBuildPyramidBase):
+    """
+    BuildPyramid - build a pyramid: a two-cube base with a cube on top.
+
+    Lays the base the way BehaviorBuildPyramidBase does, then lifts a third
+    cube onto it and celebrates. The base alone, without the top, is what
+    the base behavior leaves behind.
+    """
+
+    BLOCKS = 2
+
+    def script(self, cancel: threading.Event) -> None:
+        if not self._lay_base(cancel):
+            return
+        _check(cancel)
+        cubes = usable_cubes(self.cli)
+        base = [cube for cube in self.cli.cubes
+                if cube.pose is not None and cube.up_axis in (None, UpAxis.ZPositive)]
+        if len(cubes) < 1 or len(base) < 2:
+            return
+        if not self.pick_up(cubes[0], cancel):
+            return self.give_up("could not pick the top block up")
+        if cube_handling.place_on_cube(self.cli, base[0], cancel=cancel):
+            self.play("BuildPyramidSuccess", cancel)
+            self.need_action()
+        else:
+            cube_handling.put_down_cube(self.cli, cancel=cancel)
+
+
+class BehaviorCantHandleTallStack(BehaviorScript):
+    """
+    CantHandleTallStack - look a tall stack over, sadly.
+
+    Looks the stack down and up again, and plays the sad look it cannot
+    handle. If a block moves past the threshold while looking, the stack
+    is coming down on its own and there is nothing to look at.
+    """
+
+    def __init__(self, cli: Any, conf: Any, robot_needs: Any = None):
+        super().__init__(cli, conf, robot_needs)
+        self.minimum = int(conf.get("minimumStackHeight", 3))
+        self.initial_wait = float(conf.get("lookingInitialWait_s", 1.0))
+        self.down_wait = float(conf.get("lookingDownWait_s", 1.0))
+        self.up_wait = float(conf.get("lookingUpWait_s", 1.0))
+        self.moved_threshold = float(conf.get("minBlockMovedThreshold_mm", 20.0))
+
+    def wants_to_run(self) -> bool:
+        stack = _tallest_stack(self.cli, self.minimum)
+        return stack is not None
+
+    def _positions(self, cli: Any) -> Dict[int, Tuple[float, float, float]]:
+        return {id(cube): (cube.pose.x, cube.pose.y, cube.pose.z)
+                for cube in cli.cubes if cube.pose is not None}
+
+    def _moved(self, before: Dict[int, Tuple[float, float, float]]) -> bool:
+        """ Whether a known cube moved past the threshold - or the stack came down. """
+        after = self._positions(self.cli)
+        if _tallest_stack(self.cli, self.minimum) is None:
+            return True
+        for key, old in before.items():
+            new = after.get(key)
+            if new is not None and math.hypot(new[0] - old[0], new[1] - old[1], new[2] - old[2]) \
+                    > self.moved_threshold:
+                return True
+        return False
+
+    def script(self, cancel: threading.Event) -> None:
+        if _tallest_stack(self.cli, self.minimum) is None:
+            return
+        before = self._positions(self.cli)
+        self.cli.set_head_angle(robot.MIN_HEAD_ANGLE.radians)
+        if cancel.wait(self.initial_wait + self.down_wait):
+            raise Cancelled()
+        self.cli.set_head_angle(robot.MAX_HEAD_ANGLE.radians)
+        if cancel.wait(self.up_wait):
+            raise Cancelled()
+        if self._moved(before):
+            return
+        self.play("CantHandleTallStack", cancel)
+
+
+class BehaviorCheckForStackAtInterval(BehaviorScript):
+    """
+    CheckForStackAtInterval - have a look for a stack, now and then.
+
+    The engine offers it every so often; finding a stack gets the same
+    acknowledgement the reaction to one would, and finding nothing ends it
+    quietly. The interval between offers belongs to the activity.
+    """
+
+    #: How tall a pile counts as a stack.
+    MINIMUM_HEIGHT = 3
+
+    def wants_to_run(self) -> bool:
+        return True
+
+    def script(self, cancel: threading.Event) -> None:
+        _check(cancel)
+        if _tallest_stack(self.cli, self.MINIMUM_HEIGHT) is not None:
+            self.play("AcknowledgeObject", cancel)
+
+
+class BehaviorKnockOverCubes(BehaviorScript):
+    """
+    KnockOverCubes - grab a block and knock a stack down with the drive.
+
+    Reaches for a spare block, eyes the stack, and rams its foot with the
+    robot's front, then tells success from failure by whether the stack
+    moved and puts the carried block back down. The stack it aims at is the
+    tallest pile of at least the configured height.
+    """
+
+    #: What counts as a stack, and what counts as knocked.
+    MOVED_THRESHOLD = 30.0
+
+    def __init__(self, cli: Any, conf: Any, robot_needs: Any = None):
+        super().__init__(cli, conf, robot_needs)
+        self.minimum = int(conf.get("minimumStackHeight", 3))
+
+    def wants_to_run(self) -> bool:
+        return self.cli.cubes.carried is None and \
+            _tallest_stack(self.cli, self.minimum) is not None and \
+            bool(usable_cubes(self.cli))
+
+    def script(self, cancel: threading.Event) -> None:
+        stack = _tallest_stack(self.cli, self.minimum)
+        cubes = usable_cubes(self.cli)
+        if stack is None or not cubes:
+            return
+        before = {}
+        for cube in stack:
+            if cube.pose is not None:
+                before[id(cube)] = (cube.pose.x, cube.pose.y, cube.pose.z)
+        foot = stack[0]
+        assert foot.pose is not None
+        self.play(str(self.conf.get("reachForBlockTrigger", "KnockOverGrabAttempt")), cancel)
+        if not self.pick_up(cubes[0], cancel):
+            return self.give_up("could not grab a block")
+        self.play(str(self.conf.get("knockOverEyesTrigger", "KnockOverEyes")), cancel)
+        dx = foot.pose.x - self.cli.pose.position.x
+        dy = foot.pose.y - self.cli.pose.position.y
+        heading = self.cli.pose.rotation.angle_z.radians
+        self.cli.turn_in_place(util.Angle(radians=_wrap(math.atan2(dy, dx) - heading)), wait=True)
+        _check(cancel)
+        self.cli.drive_straight(util.Distance(mm=120.0), speed=80.0, wait=True)
+        moved = False
+        for cube in self.cli.cubes:
+            if cube.pose is None or id(cube) not in before:
+                continue
+            x, y, z = before[id(cube)]
+            if math.hypot(cube.pose.x - x, cube.pose.y - y, cube.pose.z - z) > self.MOVED_THRESHOLD:
+                moved = True
+        if moved:
+            self.play(str(self.conf.get("knockOverSuccessTrigger", "KnockOverSuccess")), cancel)
+            self.need_action()
+        else:
+            self.play(str(self.conf.get("knockOverFailureTrigger", "KnockOverFailure")), cancel)
+        if str(self.conf.get("knockOverPutDownTrigger", "")):
+            self.play(str(self.conf.get("knockOverPutDownTrigger")), cancel)
+        cube_handling.put_down_cube(self.cli, cancel=cancel)
+
+
+class BehaviorRespondPossiblyRoll(BehaviorScript):
+    """
+    RespondPossiblyRoll - answer a block that may have rolled.
+
+    Looks at the nearest known block: upright gets the happy answer, on
+    its side the frustrated one, reusing the first-block pair. Nothing
+    known ends it with nothing to say.
+    """
+
+    def wants_to_run(self) -> bool:
+        return any(cube.pose is not None for cube in self.cli.cubes)
+
+    def script(self, cancel: threading.Event) -> None:
+        x, y = self.cli.pose.position.x, self.cli.pose.position.y
+        cube = min((cube for cube in self.cli.cubes if cube.pose is not None),
+                   key=lambda cube: math.hypot(cube.pose.x - x, cube.pose.y - y),
+                   default=None)
+        if cube is None:
+            return
+        if cube.up_axis in (None, UpAxis.ZPositive):
+            self.play("BuildPyramidFirstBlockUpright", cancel)
+        else:
+            self.play("BuildPyramidFirstBlockOnSide", cancel)
