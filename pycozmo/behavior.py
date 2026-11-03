@@ -205,8 +205,16 @@ class BehaviorPlayAnim(Behavior):
 class BehaviorPlayArbitraryAnim(BehaviorPlayAnim):
     """ Play a random animation trigger. """
 
+    def get_anim_triggers(self) -> Sequence[str]:
+        triggers = list(super().get_anim_triggers())
+        if triggers:
+            return (random.choice(triggers), )
+        groups = self.cli.animation_groups or {}
+        if groups:
+            return (random.choice(list(groups.keys())), )
+        return ()
+
     def activate(self) -> None:
-        # TODO: Pick random animation trigger and put it in sequence
         super().activate()
 
 
@@ -220,10 +228,32 @@ class BehaviorAcknowledge(BehaviorPlayAnim):
 
 
 class BehaviorReactToCliff(BehaviorPlayAnim):
-    """ ReactToCliff behavior - currently, just plays animation. """
+    """ ReactToCliff behavior - play the cliff animation then back away from the edge. """
 
-    # TODO: Back away from the cliff.
     default_anim_triggers = ("ReactToCliff", )
+
+    BACKUP_SPEED = 40.0
+    BACKUP_DISTANCE = 50.0
+
+    def __init__(self, cli: client.Client, conf: Any,
+                 robot_needs: Optional[needs.Needs] = None) -> None:
+        super().__init__(cli, conf, robot_needs)
+        self.timer: Optional[threading.Timer] = None
+
+    def on_sequence_completed(self) -> None:
+        # Back away from the cliff after the animation.
+        self.cli.drive_wheels(-self.BACKUP_SPEED, -self.BACKUP_SPEED)
+        self.timer = threading.Timer(self.BACKUP_DISTANCE / self.BACKUP_SPEED, self.cli.stop_all_motors)
+        self.timer.daemon = True
+        self.timer.start()
+        super().on_sequence_completed()
+
+    def deactivate(self) -> None:
+        if self.timer is not None:
+            self.timer.cancel()
+            self.timer = None
+        self.cli.stop_all_motors()
+        super().deactivate()
 
 
 class BehaviorReactToPickup(BehaviorPlayAnim):
@@ -242,8 +272,18 @@ class BehaviorReactToImpact(BehaviorPlayAnim):
 class BehaviorReactToUnexpectedMovement(BehaviorPlayAnim):
     """ ReactToUnexpectedMovement behavior - react to being moved or held back while driving. """
 
-    # TODO: The engine has severe low-energy and low-repair variants of this reaction.
     default_anim_triggers = ("ReactToUnexpectedMovement", )
+
+    def get_anim_triggers(self) -> Sequence[str]:
+        if self.needs is not None:
+            groups = self.cli.animation_groups or {}
+            if self.needs.bracket("Energy") == "Critical" and \
+                    "ReactToUnexpectedMovement_Severe_Energy" in groups:
+                return ("ReactToUnexpectedMovement_Severe_Energy", )
+            if self.needs.bracket("Repair") == "Critical" and \
+                    "ReactToUnexpectedMovement_Severe_Repair" in groups:
+                return ("ReactToUnexpectedMovement_Severe_Repair", )
+        return super().get_anim_triggers()
 
     def on_sequence_completed(self) -> None:
         # Being shoved around costs confidence.
@@ -261,8 +301,16 @@ class BehaviorReactToRobotOnBack(BehaviorPlayAnim):
 class BehaviorReactToRobotOnFace(BehaviorPlayAnim):
     """ ReactToRobotOnFace behavior - roll off the face and back onto the treads. """
 
-    # TODO: FailedToRightFromFace, when the robot is still on its face afterwards.
     default_anim_triggers = ("FacePlantRoll", )
+
+    def on_sequence_completed(self) -> None:
+        if self.cli.robot_orientation == robot.RobotOrientation.ON_FACE and \
+                "FailedToRightFromFace" in (self.cli.animation_groups or {}):
+            self.sequence = ["FailedToRightFromFace"]
+            self.current_trigger = 0
+            self._play_next()
+            return
+        super().on_sequence_completed()
 
 
 class BehaviorReactToRobotOnSide(BehaviorPlayAnim):
@@ -278,16 +326,46 @@ class BehaviorReactToRobotOnSide(BehaviorPlayAnim):
 class BehaviorReactToRobotShaken(BehaviorPlayAnim):
     """ ReactToRobotShaken behavior - recover from being shaken. """
 
-    # TODO: Loop DizzyShakeLoop while the shaking lasts and pick the reaction by its intensity
-    #  (DizzyReactionSoft, DizzyReactionMedium, DizzyReactionHard).
     default_anim_triggers = ("DizzyShakeStop", )
+
+    def get_anim_triggers(self) -> Sequence[str]:
+        level = self.conf.get("shakeIntensity", "Medium")
+        groups = self.cli.animation_groups or {}
+        accel = getattr(self.cli, "accelerometer", None)
+        if accel is not None:
+            try:
+                mag = (accel.x ** 2 + accel.y ** 2 + accel.z ** 2) ** 0.5
+                if mag > 15000:
+                    level = "Hard"
+                elif mag > 8000:
+                    level = "Medium"
+                else:
+                    level = "Soft"
+            except Exception:
+                pass
+        trigger = "DizzyReaction{}".format(level)
+        if trigger in groups:
+            return (trigger, )
+        # play the loop while shaking lasts, then the stop
+        if "DizzyShakeLoop" in groups and getattr(self.cli, "robot_shaken", False):
+            return ("DizzyShakeLoop", "DizzyShakeStop")
+        return super().get_anim_triggers()
 
 
 class BehaviorReactToPet(BehaviorPlayAnim):
     """ ReactToPet behavior - react to a cat or a dog being seen. """
 
-    # TODO: PetDetectionShort_Cat and PetDetectionShort_Dog, once the pet type is known.
     default_anim_triggers = ("PetDetectionShort", )
+
+    def get_anim_triggers(self) -> Sequence[str]:
+        pet_type = self.conf.get("petType")
+        if pet_type is None:
+            pet_type = getattr(self.cli, "last_pet_type", None)
+        if pet_type == "Cat" and "PetDetectionShort_Cat" in (self.cli.animation_groups or {}):
+            return ("PetDetectionShort_Cat", )
+        if pet_type == "Dog" and "PetDetectionShort_Dog" in (self.cli.animation_groups or {}):
+            return ("PetDetectionShort_Dog", )
+        return super().get_anim_triggers()
 
 
 class BehaviorReactToCubeMoved(BehaviorPlayAnim):
@@ -315,26 +393,136 @@ class BehaviorReactToFrustration(BehaviorPlayAnim):
         emotion_event = self.conf.get("finalEmotionEvent")
         if emotion_event:
             self.post_emotion_event(emotion_event)
+        # Major frustration drives away a random distance at a random angle.
+        if self.conf.get("randomDriveMinDist_mm") is not None:
+            min_dist = float(self.conf.get("randomDriveMinDist_mm", 150.0))
+            max_dist = float(self.conf.get("randomDriveMaxDist_mm", 400.0))
+            min_angle = math.radians(float(self.conf.get("randomDriveMinAngle_deg", 80.0)))
+            max_angle = math.radians(float(self.conf.get("randomDriveMaxAngle_deg", 180.0)))
+            distance = random.uniform(min_dist, max_dist)
+            angle = random.uniform(min_angle, max_angle) * random.choice((-1.0, 1.0))
+            wheel_speed = 1.5 * robot.TRACK_WIDTH.mm / 2.0
+            self.cli.drive_wheels(-math.copysign(wheel_speed, angle), math.copysign(wheel_speed, angle))
+            self._frustration_timer = threading.Timer(abs(angle) / 1.5, lambda: self._after_turn(distance))
+            self._frustration_timer.daemon = True
+            self._frustration_timer.start()
+            return
         super().on_sequence_completed()
 
-    # TODO: For the major variant, drive away by a random randomDrive* amount.
+    def _after_turn(self, distance: float) -> None:
+        if self.deactivated:
+            return
+        self.cli.drive_wheels(40.0, 40.0)
+        self._frustration_timer = threading.Timer(abs(distance) / 40.0, self._frustration_done)  # type: ignore[attr-defined]
+        self._frustration_timer.daemon = True
+        self._frustration_timer.start()
+
+    def _frustration_done(self) -> None:
+        if self.deactivated:
+            return
+        self.cli.stop_all_motors()
+        super().on_sequence_completed()
+
+    def deactivate(self) -> None:
+        timer = getattr(self, "_frustration_timer", None)
+        if timer is not None:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+        self.cli.stop_all_motors()
+        super().deactivate()
 
 
 class BehaviorRamIntoBlock(BehaviorPlayAnim):
     """ RamIntoBlock behavior - drive into a block that cannot be approached to dock with. """
 
-    # TODO: Drive into the block. Only the sound of the crash is played for now.
     default_anim_triggers = ("SoundOnlyRamIntoBlock", )
+    DRIVE_SPEED = 80.0
+    DRIVE_DISTANCE = 80.0
+
+    def __init__(self, cli: client.Client, conf: Any,
+                 robot_needs: Optional[needs.Needs] = None) -> None:
+        super().__init__(cli, conf, robot_needs)
+        self.timer: Optional[threading.Timer] = None
+
+    def on_sequence_completed(self) -> None:
+        self.cli.drive_wheels(self.DRIVE_SPEED, self.DRIVE_SPEED)
+        self.timer = threading.Timer(self.DRIVE_DISTANCE / self.DRIVE_SPEED, self.cli.stop_all_motors)
+        self.timer.daemon = True
+        self.timer.start()
+        super().on_sequence_completed()
+
+    def deactivate(self) -> None:
+        if self.timer is not None:
+            self.timer.cancel()
+            self.timer = None
+        self.cli.stop_all_motors()
+        super().deactivate()
 
 
 class BehaviorFistBump(BehaviorPlayAnim):
-    """ FistBump behavior - ask for a fist bump. """
+    """ FistBump behavior - ask for a fist bump, watching for a face and a bump. """
 
-    # The bump itself is felt on the accelerometer, which is not wired up, so the robot asks
-    # once and is left hanging.
-    # TODO: Look for a face first (maxTimeToLookForFace_s, abortIfNoFaceFound), detect the bump
-    #  and play FistBumpSuccess, retrying with FistBumpRequestRetry.
     default_anim_triggers = ("FistBumpRequestOnce", "FistBumpLeftHanging")
+    BUMP_THRESHOLD_G = 2.0
+
+    def __init__(self, cli: client.Client, conf: Any,
+                 robot_needs: Optional[needs.Needs] = None) -> None:
+        super().__init__(cli, conf, robot_needs)
+        self.max_time_to_look = float(conf.get("maxTimeToLookForFace_s", 3.0))
+        self.abort_if_no_face = bool(conf.get("abortIfNoFaceFound", False))
+        self.bumped = False
+
+    def wants_to_run(self) -> bool:
+        if self.abort_if_no_face:
+            try:
+                visible = self.cli.faces.visible()  # type: ignore[union-attr]
+                if not visible:
+                    return False
+            except Exception:
+                return False
+        return super().wants_to_run()
+
+    def get_anim_triggers(self) -> Sequence[str]:
+        # If a bump was felt, celebrate with success; otherwise the usual request.
+        if self.bumped and "FistBumpSuccess" in (self.cli.animation_groups or {}):
+            return ("FistBumpSuccess", )
+        return super().get_anim_triggers()
+
+    def activate(self) -> None:
+        self.bumped = False
+        try:
+            self.add_handler(event.EvtRobotStateUpdated, self._on_robot_state)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        super().activate()
+
+    def _on_robot_state(self, cli: client.Client) -> None:  # type: ignore[override]
+        if self.bumped or self.deactivated:
+            return
+        accel = getattr(cli, "accelerometer", None) or getattr(cli, "accel", None)
+        if accel is None:
+            return
+        try:
+            mag = math.sqrt(accel.x ** 2 + accel.y ** 2 + accel.z ** 2) / 1000.0
+            if mag > self.BUMP_THRESHOLD_G:
+                self.bumped = True
+                groups = self.cli.animation_groups or {}
+                if "FistBumpSuccess" in groups:
+                    self.cli.cancel_anim()
+                    self.sequence = ["FistBumpSuccess"]
+                    self.current_trigger = 0
+                    self._play_next()
+        except Exception:
+            pass
+
+    def deactivate(self) -> None:
+        try:
+            self.remove_handler(event.EvtRobotStateUpdated, self._on_robot_state)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        super().deactivate()
 
 
 class BehaviorReactToOnCharger(BehaviorPlayAnim):
