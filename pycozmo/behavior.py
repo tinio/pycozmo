@@ -943,6 +943,168 @@ class BehaviorPounceOnMotion(Behavior):
         self.cli.cancel_anim()
 
 
+class BehaviorReactToPyramid(BehaviorPlayAnim):
+    """
+    ReactToPyramid - celebrate a pyramid of cubes.
+
+    The configuration names no animation of its own, and the trigger map
+    holds none for the reaction, so it plays the pyramid success
+    celebration: the closest the assets come to noticing a pyramid.
+    """
+
+    default_anim_triggers = ("BuildPyramidSuccess",)
+
+
+class BehaviorReactToStackOfCubes(BehaviorPlayAnim):
+    """
+    ReactToStackOfCubes - acknowledge a stack of cubes.
+
+    The configuration names no animation of its own, and the trigger map
+    holds none for the reaction, so it plays the short block
+    acknowledgement.
+    """
+
+    default_anim_triggers = ("AcknowledgeObject",)
+
+
+class BehaviorReactToReturnedToTreads(Behavior):
+    """
+    ReactToReturnedToTreads - upright again after a fall.
+
+    Raised when the orientation comes back to treads. Righting itself is
+    the reaction; the trigger map holds no animation for it, so there is
+    nothing further to play and the behavior is done at once.
+    """
+
+    def activate(self) -> None:
+        logger.debug("Behavior '{}' upright again.".format(self.get_id()))
+        self.done()
+
+
+class BehaviorReactToPlacedOnSlope(Behavior):
+    """
+    ReactToPlacedOnSlope - back off a slope the robot was put on.
+
+    Raised when the robot finds itself tilted. The trigger map holds no
+    animation for it, so it backs away instead: a short reverse with the
+    cliff stop left on, then done. Timed rather than measured, like
+    driving off the charger, and cancelled with the behavior.
+    """
+
+    #: How fast and far to back away, in mm/s and mm.
+    BACKUP_SPEED = 40.0
+    BACKUP_DISTANCE = 60.0
+
+    def __init__(self, cli: client.Client, conf: Any,
+                 robot_needs: Optional[needs.Needs] = None):
+        super().__init__(cli, conf, robot_needs)
+        self.timer: Optional[threading.Timer] = None
+
+    def activate(self) -> None:
+        self.cli.drive_wheels(-self.BACKUP_SPEED, -self.BACKUP_SPEED)
+        self.timer = threading.Timer(self.BACKUP_DISTANCE / self.BACKUP_SPEED, self._arrived)
+        self.timer.daemon = True
+        self.timer.start()
+
+    def _arrived(self) -> None:
+        self.timer = None
+        self.cli.stop_all_motors()
+        self.done()
+
+    def deactivate(self) -> None:
+        if self.timer is not None:
+            self.timer.cancel()
+            self.timer = None
+        self.cli.stop_all_motors()
+
+
+class BehaviorReactToMotorCalibration(Behavior):
+    """
+    ReactToMotorCalibration - motors calibrated.
+
+    Raised when a calibration finishes. Calibrating moves the motors
+    itself; the trigger map holds no animation for the aftermath, so
+    there is nothing further to do.
+    """
+
+    def activate(self) -> None:
+        logger.debug("Behavior '{}' calibrated.".format(self.get_id()))
+        self.done()
+
+
+class BehaviorOnConfigSeen(BehaviorPlayAnim):
+    """
+    OnConfigSeen - react to a seen configuration: a pyramid base.
+
+    The configuration names its animation trigger itself
+    (BuildPyramidReactToBase), which the trigger map holds.
+    """
+
+
+class BehaviorPyramidThankYou(BehaviorPlayAnim):
+    """
+    PyramidThankYou - thank the user for the pyramid.
+
+    The configuration names no animation of its own, so it plays the
+    pyramid thank-user animation from the trigger map.
+    """
+
+    default_anim_triggers = ("BuildPyramidThankUser",)
+
+
+class BehaviorEarnedSparks(BehaviorPlayAnim):
+    """
+    EarnedSparks - celebrate earned sparks.
+
+    The configuration names no animation of its own, so it plays the
+    sparks trigger of the same name from the trigger map.
+    """
+
+    default_anim_triggers = ("EarnedSparks",)
+
+
+class BehaviorRespondToRenameFace(BehaviorPlayAnim):
+    """
+    RespondToRenameFace - say the face's new name.
+
+    The configuration names its animation trigger under a key of its own
+    (animationTrigger): MeetCozmoRenameFaceSayName.
+    """
+
+    def get_anim_triggers(self) -> Sequence[str]:
+        trigger = self.conf.get("animationTrigger")
+        return (trigger, ) if trigger else ()
+
+
+class BehaviorPlayAnimWithFace(BehaviorPlayAnim):
+    """
+    PlayAnimWithFace - play an animation at a face, chosen by need level.
+
+    The voice-command and feeding configurations carry their animation
+    triggers, except the three HowAreYouDoing energy, play and repair
+    variants, whose NeutralFace placeholder the engine overrides with an
+    animation for the need level asked about: the severe request at
+    Critical, the mild one at Warning, and the neutral face otherwise.
+    The need is read from the behavior ID, whose tail names it.
+    """
+
+    #: Placeholder the configurations use where the engine picks the animation.
+    PLACEHOLDER = "NeutralFace"
+
+    def get_anim_triggers(self) -> Sequence[str]:
+        triggers = list(super().get_anim_triggers())
+        if triggers != [self.PLACEHOLDER]:
+            return triggers
+        need = self.get_id().rsplit("_", 1)[-1]
+        if self.needs is not None:
+            bracket = self.needs.bracket(need)
+            if bracket == "Critical":
+                return ("NeedsSevereLow{}Request".format(need), )
+            if bracket == "Warning":
+                return ("NeedsMildLow{}Request".format(need), )
+        return (self.PLACEHOLDER, )
+
+
 def get_behavior_class_from_dict(data):
     """ Choose a behavior class, based on the behaviorClass JSON attribute. """
     # TODO: Replace with a behavior package.
@@ -972,8 +1134,16 @@ def get_behavior_class_from_dict(data):
         "DriveInDesperation": BehaviorDriveInDesperation,
         "Wait": BehaviorWait,
         "PounceOnMotion": BehaviorPounceOnMotion,
-        # Not implemented, for lack of an animation in AnimationTriggerMap.json:
-        # ReactToMotorCalibration, ReactToPlacedOnSlope, ReactToReturnedToTreads.
+        "ReactToPyramid": BehaviorReactToPyramid,
+        "ReactToStackOfCubes": BehaviorReactToStackOfCubes,
+        "ReactToReturnedToTreads": BehaviorReactToReturnedToTreads,
+        "ReactToPlacedOnSlope": BehaviorReactToPlacedOnSlope,
+        "ReactToMotorCalibration": BehaviorReactToMotorCalibration,
+        "OnConfigSeen": BehaviorOnConfigSeen,
+        "PyramidThankYou": BehaviorPyramidThankYou,
+        "EarnedSparks": BehaviorEarnedSparks,
+        "RespondToRenameFace": BehaviorRespondToRenameFace,
+        "PlayAnimWithFace": BehaviorPlayAnimWithFace,
     }
     # The cube handling, game and song behaviors build on this module, so they join the map here.
     from . import cube_behaviors, game_behaviors, song_behaviors

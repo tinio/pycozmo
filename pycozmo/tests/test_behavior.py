@@ -42,6 +42,18 @@ class FakeClient(pycozmo.event.Dispatcher):
         "ReactToUnexpectedMovement",
         "SoundOnlyRamIntoBlock",
         "SparkGetIn",
+        "BuildPyramidSuccess",
+        "BuildPyramidReactToBase",
+        "BuildPyramidThankUser",
+        "EarnedSparks",
+        "MeetCozmoRenameFaceSayName",
+        "NeedsMildLowEnergyRequest",
+        "NeedsSevereLowEnergyRequest",
+        "NeedsMildLowPlayRequest",
+        "NeedsSevereLowPlayRequest",
+        "NeedsMildLowRepairRequest",
+        "NeedsSevereLowRepairRequest",
+        "NeutralFace",
     )
 
     def __init__(self):
@@ -214,6 +226,14 @@ class TestReactions(BehaviorTestCase):
          {"ReactionAnimGroup": "AcknowledgeObject"}, ["AcknowledgeObject"]),
         (pycozmo.behavior.BehaviorReactToFrustration,
          {"anim": "FrustratedByFailure"}, ["FrustratedByFailure"]),
+        (pycozmo.behavior.BehaviorReactToPyramid, None, ["BuildPyramidSuccess"]),
+        (pycozmo.behavior.BehaviorReactToStackOfCubes, None, ["AcknowledgeObject"]),
+        (pycozmo.behavior.BehaviorPyramidThankYou, None, ["BuildPyramidThankUser"]),
+        (pycozmo.behavior.BehaviorEarnedSparks, None, ["EarnedSparks"]),
+        (pycozmo.behavior.BehaviorOnConfigSeen,
+         {"animTriggers": ["BuildPyramidReactToBase"]}, ["BuildPyramidReactToBase"]),
+        (pycozmo.behavior.BehaviorRespondToRenameFace,
+         {"animationTrigger": "MeetCozmoRenameFaceSayName"}, ["MeetCozmoRenameFaceSayName"]),
     )
 
     def test_reactions(self):
@@ -463,6 +483,16 @@ class TestGetBehaviorClassFromDict(unittest.TestCase):
         "ReactToRobotShaken": pycozmo.behavior.BehaviorReactToRobotShaken,
         "ReactToSparked": pycozmo.behavior.BehaviorReactToSparked,
         "ReactToUnexpectedMovement": pycozmo.behavior.BehaviorReactToUnexpectedMovement,
+        "ReactToPyramid": pycozmo.behavior.BehaviorReactToPyramid,
+        "ReactToStackOfCubes": pycozmo.behavior.BehaviorReactToStackOfCubes,
+        "ReactToReturnedToTreads": pycozmo.behavior.BehaviorReactToReturnedToTreads,
+        "ReactToPlacedOnSlope": pycozmo.behavior.BehaviorReactToPlacedOnSlope,
+        "ReactToMotorCalibration": pycozmo.behavior.BehaviorReactToMotorCalibration,
+        "OnConfigSeen": pycozmo.behavior.BehaviorOnConfigSeen,
+        "PyramidThankYou": pycozmo.behavior.BehaviorPyramidThankYou,
+        "EarnedSparks": pycozmo.behavior.BehaviorEarnedSparks,
+        "RespondToRenameFace": pycozmo.behavior.BehaviorRespondToRenameFace,
+        "PlayAnimWithFace": pycozmo.behavior.BehaviorPlayAnimWithFace,
     }
 
     def test_known_classes(self):
@@ -473,9 +503,8 @@ class TestGetBehaviorClassFromDict(unittest.TestCase):
                     expected)
 
     def test_unknown_class_falls_back(self):
-        # AnimationTriggerMap.json holds no animation for these three, so they stay unimplemented.
-        for behavior_class in ("ReactToMotorCalibration", "ReactToPlacedOnSlope",
-                               "ReactToReturnedToTreads", "NoSuchBehaviorClass"):
+        # Classes the resources name but nothing implements yet, and names nothing does.
+        for behavior_class in ("Bouncer", "FindFaces", "GuardDog", "NoSuchBehaviorClass"):
             with self.subTest(behavior_class=behavior_class):
                 self.assertIs(
                     pycozmo.behavior.get_behavior_class_from_dict({"behaviorClass": behavior_class}),
@@ -557,13 +586,63 @@ class TestAgainstCozmoAssets(unittest.TestCase):
                 for trigger in triggers:
                     self.assertIn(trigger, self.anim_triggers)
 
-    def test_unimplemented_reactions(self):
+    def test_quiet_reactions_are_implemented(self):
         # AnimationTriggerMap.json holds no animation for these, under their behaviour ID, their
-        # reaction trigger, or any name close to either.
-        for behavior_id in ("ReactToMotorCalibration", "ReactToPlacedOnSlope",
-                            "ReactToReturnedToTreads"):
+        # reaction trigger, or any name close to either, so they are quiet behaviors rather than
+        # animation players — but they are implemented classes all the same.
+        expected = {
+            "ReactToMotorCalibration": pycozmo.behavior.BehaviorReactToMotorCalibration,
+            "ReactToPlacedOnSlope": pycozmo.behavior.BehaviorReactToPlacedOnSlope,
+            "ReactToReturnedToTreads": pycozmo.behavior.BehaviorReactToReturnedToTreads,
+        }
+        for behavior_id, cls in expected.items():
             with self.subTest(behavior=behavior_id):
-                self.assertIs(type(self.behaviors[behavior_id]), pycozmo.behavior.Behavior)
+                self.assertIs(type(self.behaviors[behavior_id]), cls)
+
+    def test_every_behavior_class_is_implemented(self):
+        # Every behaviorClass in the resources resolves to a real class: the engine would
+        # otherwise run a silent no-op base Behavior. EXPECTED_UNMAPPED names the ones still
+        # to do; shrink it as waves of behaviors land.
+        from pycozmo.behavior import get_behavior_class_from_dict
+        classes = {behavior.conf["behaviorClass"] for behavior in self.behaviors.values()}
+        unmapped = {c for c in classes
+                    if get_behavior_class_from_dict({"behaviorClass": c}) is pycozmo.behavior.Behavior}
+        self.assertEqual(unmapped, self.EXPECTED_UNMAPPED)
+
+    #: Behavior classes in the resources with no implementation yet.
+    EXPECTED_UNMAPPED = frozenset({
+        "Bouncer",
+        "BringCubeToBeacon",
+        "BuildPyramid",
+        "BuildPyramidBase",
+        "CantHandleTallStack",
+        "CheckForStackAtInterval",
+        "DevTurnInPlaceTest",
+        "DockingTestSimple",
+        "DriveToFace",
+        "EnrollFace",
+        "ExploreLookAroundInPlace",
+        "ExploreVisitPossibleMarker",
+        "FactoryCentroidExtractor",
+        "FactoryTest",
+        "FeedingEat",
+        "FeedingSearchForCube",
+        "FindFaces",
+        "FireTruckAlarm",
+        "GuardDog",
+        "InteractWithFaces",
+        "KnockOverCubes",
+        "LiftLoadTest",
+        "LookForFaceAndCube",
+        "LookInPlaceMemoryMap",
+        "OnboardingShowCube",
+        "PeekABoo",
+        "RespondPossiblyRoll",
+        "SearchForFace",
+        "ThinkAboutBeacons",
+        "TrackLaser",
+        "VisitInterestingEdge",
+    })
 
     def test_every_reaction_trigger_has_a_behavior(self):
         for reactions in self.reaction_triggers.values():
@@ -581,6 +660,103 @@ class TestAgainstCozmoAssets(unittest.TestCase):
         self.assertEqual(by_id["ReactToFrustrationMinor"].max_confidence, -0.6)
         self.assertEqual(by_id["ReactToFrustrationMajor"].max_confidence, -0.9)
         self.assertEqual(by_id["ReactToFrustrationMinor"].cooldown_time, 60.0)
+
+
+class TestBehaviorQuietReactions(BehaviorTestCase):
+    """ Reactions with no animation finish at once, playing nothing. """
+
+    def test_returned_to_treads(self):
+        behavior = self.make(pycozmo.behavior.BehaviorReactToReturnedToTreads)
+        behavior.activate()
+        self.assertEqual(self.cli.played, [])
+        self.assertDone()
+
+    def test_motor_calibration(self):
+        behavior = self.make(pycozmo.behavior.BehaviorReactToMotorCalibration)
+        behavior.activate()
+        self.assertEqual(self.cli.played, [])
+        self.assertDone()
+
+
+class TestBehaviorReactToPlacedOnSlope(BehaviorTestCase):
+    """ Backing off a slope drives both wheels back, then stops and finishes. """
+
+    def test_backs_up_then_finishes(self):
+        behavior = self.make(pycozmo.behavior.BehaviorReactToPlacedOnSlope)
+        behavior.activate()
+        self.assertEqual(self.cli.wheel_speeds, [(-40.0, -40.0)])
+        self.assertNotDone()
+        timer = behavior.timer
+        self.assertIsNotNone(timer)
+        assert timer is not None
+        timer.join(3.0)
+        self.assertFalse(timer.is_alive())
+        self.assertEqual(self.cli.stopped, 1)
+        self.assertDone()
+
+    def test_deactivate_stops_the_wheels(self):
+        behavior = self.make(pycozmo.behavior.BehaviorReactToPlacedOnSlope)
+        behavior.activate()
+        behavior.deactivate()
+        self.assertIsNone(behavior.timer)
+        self.assertEqual(self.cli.stopped, 1)
+
+
+class StubNeeds:
+    """ Stands in for Needs, answering one bracket per need name. """
+
+    def __init__(self, brackets):
+        self.brackets = dict(brackets)
+
+    def bracket(self, name):
+        return self.brackets.get(name, "Full")
+
+
+class TestBehaviorPlayAnimWithFace(BehaviorTestCase):
+    """ The needs-level variants pick their animation by bracket; the rest play their triggers. """
+
+    def test_explicit_triggers_play_unchanged(self):
+        behavior = self.make(
+            pycozmo.behavior.BehaviorPlayAnimWithFace,
+            {"animTriggers": ["NeedsMildLowEnergyRequest"]},
+            behavior_id="FeedingPlayRequestAtFace")
+        behavior.activate()
+        self.assertEqual(self.cli.played, ["NeedsMildLowEnergyRequest"])
+
+    def test_critical_plays_the_severe_request(self):
+        behavior = self.make(
+            pycozmo.behavior.BehaviorPlayAnimWithFace,
+            {"animTriggers": ["NeutralFace"]},
+            behavior_id="VC_HowAreYouDoing_Energy")
+        behavior.needs = StubNeeds({"Energy": "Critical"})
+        behavior.activate()
+        self.assertEqual(self.cli.played, ["NeedsSevereLowEnergyRequest"])
+
+    def test_warning_plays_the_mild_request(self):
+        behavior = self.make(
+            pycozmo.behavior.BehaviorPlayAnimWithFace,
+            {"animTriggers": ["NeutralFace"]},
+            behavior_id="VC_HowAreYouDoing_Play")
+        behavior.needs = StubNeeds({"Play": "Warning"})
+        behavior.activate()
+        self.assertEqual(self.cli.played, ["NeedsMildLowPlayRequest"])
+
+    def test_full_plays_the_neutral_face(self):
+        behavior = self.make(
+            pycozmo.behavior.BehaviorPlayAnimWithFace,
+            {"animTriggers": ["NeutralFace"]},
+            behavior_id="VC_HowAreYouDoing_Repair")
+        behavior.needs = StubNeeds({"Repair": "Full"})
+        behavior.activate()
+        self.assertEqual(self.cli.played, ["NeutralFace"])
+
+    def test_without_needs_plays_the_neutral_face(self):
+        behavior = self.make(
+            pycozmo.behavior.BehaviorPlayAnimWithFace,
+            {"animTriggers": ["NeutralFace"]},
+            behavior_id="VC_HowAreYouDoing_Energy")
+        behavior.activate()
+        self.assertEqual(self.cli.played, ["NeutralFace"])
 
 
 class TestEmotionEvents(BehaviorTestCase):
