@@ -98,6 +98,11 @@ class BehaviorBouncer(BehaviorScript):
         cubes = [cube for cube in self.cli.cubes if cube.connected]
         self.play("BouncerIdeaToPlay", cancel)
         self.play("BouncerRequestToPlay", cancel)
+        # No cubes: degrade gracefully without the full wait - best-effort visible.
+        if not cubes:
+            self.play("BouncerTimeout", cancel)
+            self.play("BouncerGetOut", cancel)
+            return
         if _wait_for_tap(self.cli, cubes, request_timeout, cancel,
                          play=self.play, idle="BouncerWait") is None:
             self.play("BouncerTimeout", cancel)
@@ -169,6 +174,14 @@ class BehaviorGuardDog(BehaviorScript):
         return now[3] != before[3] and now[3] is not None
 
     def script(self, cancel: threading.Event) -> None:
+        # No cubes: quick visible fallback - settle then timeout with no touch.
+        try:
+            if not usable_cubes(self.cli):
+                self.play("GuardDogSettle", cancel)
+                self.play("GuardDogTimeoutCubesUntouched", cancel)
+                return
+        except Exception:
+            pass
         watch_timeout = float(self.conf.get("timeout_sec", self.WATCH_TIMEOUT))
         round_seconds = float(self.conf.get("round_sec", self.ROUND_SECONDS))
         self.play("GuardDogSettle", cancel)

@@ -238,6 +238,16 @@ With v2381 and the APK's 255 MB of converted Vorbis in place (tools/pycozmo_conv
     failing on first miss; FactoryCentroidExtractor snaps a camera frame and centroids its bright pixels. New modules
     pycozmo.interactive_behaviors and pycozmo.dev_behaviors. Untested on cubes pending batteries (see pending verifications
     note below); TrackLaser untested without a laser pointer.
+- No-block degradation: reaction behaviors that once were silent stubs now play their best-effort animations when
+    no hardware is present (ReactToPet picks Cat/Dog variant from last_pet_type, UnexpectedMovement picks Severe by need
+    bracket, Frustration drives a random turn/drive, RobotShaken grades by accelerometer, FistBump watches for a bump
+    g-force and celebrates, etc.); DriveOffCharger tries a wake animation (HikingWakeUpOffCharger/ConnectWakeUp) before
+    driving; Brain loads features.json and vision_config.json, honors VisionModes (DetectingLaserPoints, DetectingPets,
+    CheckingQuality brightness sanity, laser spot remembered for TrackLaser), wires charger/face handlers and a heartbeat
+    start-on-charger drive-off; cube handling behaviors degrade visibly via BehaviorScript._no_cube_fallback (camera on,
+    30-degree search turn, Frustrated/SearchForBlock fallback animation) when activated without a usable cube, while
+    Brain still gates them on usable_cubes; Bouncer/GuardDog short-circuit to Timeout/GetOut or TimeoutCubesUntouched
+    without waiting the full request/watch timeout when no cubes are present.
 
 Bug fixes:
 - Client.load_anims() took 8 s, 7 of them finding the files of the animation groups' 573 triggers: each walked the whole
