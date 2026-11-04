@@ -351,6 +351,31 @@ Firmware transfer completion is indicated by the engine with e `FirmwareUpdate` 
 data set to all-zeros. The robot confirms firmware update completion by sending a `FirmwareUpdateResult` message that
 repeats the last chunk ID and has a `status` field set to 10.
 
+The `status` byte is signed. Anki's engine names its values (libcozmoEngine.so of the 3.4.0 application):
+
+| Status | Name | Status | Name |
+|---|---|---|---|
+| 0 | OKAY | -1 | ERR_NO_MEM |
+| 1 | BUSY | -2 | ERR_BAD_ADDRESS |
+| 2 | NOTHING_TO_DO | -3 | ERR_BAD_DATA |
+| 3 | OUT_OF_ORDER | -4 | ERR_BAD_ENC |
+| 4 | NOT_ENABLED | -5 | ERR_I2SPI |
+| 5 | NOT_ON_CHARGER | -6 | ERR_RTIP_NAK |
+| 10 | SUCCESS | -7 | ERR_RTIP_TIMEOUT |
+| | | -8 | ERR_INCOMPATIBLE |
+| | | -10 | ERR_FACT_RESET |
+| | | -20 to -25 | ERR_ERASE_TIMEOUT, ERR_ERASE_ERROR, ERR_WRITE_TIMEOUT, ERR_WRITE_ERROR, ERR_READ_TIMEOUT, ERR_READ_ERROR |
+
+After its 1 KiB signature, a `cozmo.safe` file has a block marked "CZM0" at offset 0x808, with a format number: 1 for
+v1299, 2 for v1859 to v2381.
+
+A robot whose Wi-Fi controller runs its recovery (factory) image sends `FirmwareVersionInfo` on connection - the
+versions of its three controllers - and no `FirmwareSignature`. It answers `Enable` with a 12-byte binary record in place
+of the JSON signature, and refuses NV storage commands. Its updater takes a `cozmo.safe` file as above, logging "flash
+erase", "sync recovery", "Flash Verify", "Sig Check", "Apply Wifi" and "Reboot". On one hardware version 4 robot,
+whose recovery image was built in August 2016 and whose body reported version 0, every update to v2381 and to v1299
+reported SUCCESS and the robot came back in recovery 35 to 130 s later. Why is not known.
+
 
 Bluetooth LE
 ------------

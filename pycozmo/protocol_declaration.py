@@ -531,6 +531,17 @@ PROTOCOL = Protocol(
             BoolArgument("calib_started"),
             BoolArgument("auto_started"),
         ]),
+        Command(
+            0xd2, "FirmwareVersionInfo", group="system",
+            description="Anki's FWVersionInfo. A robot on its recovery firmware sends it on connection, and no "
+                        "FirmwareSignature.",
+            arguments=[
+                UInt32Argument("wifi_version"),
+                UInt32Argument("rtip_version"),
+                UInt32Argument("body_version", description="0 seen on a robot in recovery."),
+                FArrayArgument("to_robot_clad_hash", length=16),
+                FArrayArgument("to_engine_clad_hash", length=16),
+            ]),
         Command(0xd7, "ObjectUpAxisChanged", group="objects", arguments=[
             UInt32Argument("timestamp"),
             UInt32Argument("object_id"),

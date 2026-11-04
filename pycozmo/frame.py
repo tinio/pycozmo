@@ -133,17 +133,26 @@ class Frame(object):
                 expected_offset = reader.tell() + pkt_len
                 try:
                     pkt = cls._decode_packet(pkt_type, pkt_len, reader)
-                    if reader.tell() != expected_offset:
-                        # Packet length may change between protocol versions.
-                        reader.seek_set(expected_offset)
-                    pkt.seq = pkt_seq
-                    pkt.ack = ack
-                    if not pkt.is_oob():
-                        pkt_seq = (pkt_seq + 1) % MAX_SEQ
-                    pkts.append(pkt)
                 except (ValueError, IndexError) as e:
-                    logger_protocol.debug("Failed to decode packet. Ignoring. {}".format(e))
                     reader.seek_set(expected_offset)
+                    if pkt_type != PacketType.COMMAND or pkt_len < 1:
+                        logger_protocol.debug("Failed to decode packet. Ignoring. {}".format(e))
+                        continue
+                    # A command that does not decode still holds its place in the sequence. Dropped, it left the
+                    # frame's count short and the whole frame was rejected, the packets that did decode with it; the
+                    # peer, never acknowledged, sent it again and again. A robot on its recovery firmware sends
+                    # commands laid out unlike 2381's: one sent the same one 600 times in 5 s.
+                    logger_protocol.debug("Failed to decode command. Keeping it undecoded. {}".format(e))
+                    raw = bytes(reader.buffer[expected_offset - pkt_len:expected_offset])
+                    pkt = UnknownCommand(raw[0], raw[1:])
+                if reader.tell() != expected_offset:
+                    # Packet length may change between protocol versions.
+                    reader.seek_set(expected_offset)
+                pkt.seq = pkt_seq
+                pkt.ack = ack
+                if not pkt.is_oob():
+                    pkt_seq = (pkt_seq + 1) % MAX_SEQ
+                pkts.append(pkt)
             assert seq == OOB_SEQ or seq + 1 == pkt_seq or pkt.type == PacketType.PING
         elif frame_type == FrameType.PING:
             pkt = Ping.from_reader(reader)

@@ -250,6 +250,23 @@ With v2381 and the APK's 255 MB of converted Vorbis in place (tools/pycozmo_conv
     without waiting the full request/watch timeout when no cubes are present.
 
 Bug fixes:
+- A frame holding a command that did not decode was rejected whole, with the packets that did: the command was skipped
+    without its place in the sequence, the frame's count came out short, and the peer, never acknowledged, sent it
+    again and again. A robot on its recovery firmware sends commands laid out unlike 2381's: 135 of 166 frames from
+    one were rejected, and one command was sent 601 times in 5 s. Such a command is kept, undecoded, in its place.
+- A robot on its recovery firmware failed to connect with "Failed to connect to Cozmo.", which sent people looking
+    for a network fault. It sends FirmwareVersionInfo (0xd2, Anki's FWVersionInfo: its three controllers' versions)
+    and no firmware signature; Client.wait_for_robot() now says so, with the versions.
+- pycozmo_update.py could not update a robot on its recovery firmware, the robot that most needs it: it waited for a
+    firmware signature that never comes. It now goes on without one when the robot has sent FirmwareVersionInfo. It
+    also printed "error code -1" both for a robot that did not answer and for ERR_NO_MEM, and named no result; the
+    robot's results are named as Anki's engine names them.
+- A robot debug line whose argument count did not match its format raised, and the line was lost with an error
+    logged in its place. Another firmware, the recovery image for one, numbers its strings otherwise: the format is
+    shown unfilled, with the arguments as sent.
+- The three commits of the night of 3 November that fitted the protocol to one robot's recovery firmware are reverted:
+    they cut RobotState to 65 bytes, made FirmwareSignature a byte array and SetRobotVolume one byte, changed SetOrigin
+    and SyncTime, and had the client make up a firmware signature, all of which broke a robot on 2381.
 - Client.load_anims() took 8 s, 7 of them finding the files of the animation groups' 573 triggers: each walked the whole
     tree of Cozmo's resources, 75 000 directories in all. The tree is walked once, and it takes 0.3 s; the brain starts
     as fast, and the tests that load the animations, which are most of them, are the quicker for it.

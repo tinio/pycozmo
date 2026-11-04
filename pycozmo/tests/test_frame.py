@@ -2,6 +2,7 @@
 import unittest
 
 from pycozmo.frame import Frame
+from pycozmo.protocol_base import UnknownCommand
 
 
 class TestFrame(unittest.TestCase):
@@ -29,6 +30,19 @@ class TestFrame(unittest.TestCase):
         f = Frame.from_bytes(expected)
         actual = f.to_bytes()
         self.assertEqual(expected, actual)
+
+    def test_an_undecodable_command_keeps_its_place(self):
+        # Captured from a robot on its recovery firmware: two events, then a command 0xee laid out unlike 2381's
+        # FirmwareSignature. Skipped, it left the frame's count short and the whole frame was rejected.
+        f = Frame.from_bytes(bytes.fromhex(
+            "434f5a0352450109060006000200051100f1bf7d840300000000000000000004ff00051200f4240700003bbb43ba00e974"
+            "39ef9c91b949040d00ee920abd57c8e9400204000020"))
+        self.assertEqual(len(f.pkts), 3)
+        command = f.pkts[2]
+        assert isinstance(command, UnknownCommand)
+        self.assertEqual(command.id, 0xee)
+        self.assertEqual(command.data, bytes.fromhex("920abd57c8e9400204000020"))
+        self.assertEqual(command.seq, f.seq)
 
     def test_ignore_decode_failures(self):
         # v2214 AnimationState packet with no client_drop_count field is ignored.

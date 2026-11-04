@@ -55,8 +55,10 @@ class TestDebugMessage(unittest.TestCase):
         self.assertEqual(msg, "macaddr.soft_ap: 00:11:22:33:44:55")
 
     def test_name_format_invalid_args(self):
-        with self.assertRaises(AssertionError):
-            get_debug_message(409, 624, [])
+        # A format whose argument count does not match is shown unfilled, with the arguments as sent: a robot on its
+        # recovery firmware numbers its strings otherwise, and raising lost the line and logged an error instead.
+        msg = get_debug_message(409, 624, [86, 2])
+        self.assertEqual(msg, "macaddr.soft_ap: %02x:%02x:%02x:%02x:%02x:%02x [86, 2]")
 
     def test_a_float_argument_is_read_as_one(self):
         # Words as a robot sent them: 456 and 300 degrees per second, as IEEE floats.

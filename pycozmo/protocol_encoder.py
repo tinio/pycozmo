@@ -5412,6 +5412,128 @@ class MotorCalibration(Packet):
             auto_started=auto_started)
 
 
+class FirmwareVersionInfo(Packet):
+    """ Anki's FWVersionInfo. A robot on its recovery firmware sends it on connection, and no FirmwareSignature. """
+
+    __slots__ = (
+        "_wifi_version",  # uint32
+        "_rtip_version",  # uint32
+        "_body_version",  # uint32
+        "_to_robot_clad_hash",  # uint8[16]
+        "_to_engine_clad_hash",  # uint8[16]
+    )
+
+    def __init__(self,
+                 wifi_version=0,
+                 rtip_version=0,
+                 body_version=0,
+                 to_robot_clad_hash=(),
+                 to_engine_clad_hash=()):
+        super().__init__(PacketType.COMMAND, packet_id=0xd2)
+        self.wifi_version = wifi_version
+        self.rtip_version = rtip_version
+        # 0 seen on a robot in recovery.
+        self.body_version = body_version
+        self.to_robot_clad_hash = to_robot_clad_hash
+        self.to_engine_clad_hash = to_engine_clad_hash
+
+    @property
+    def wifi_version(self):
+        return self._wifi_version
+
+    @wifi_version.setter
+    def wifi_version(self, value):
+        self._wifi_version = validate_integer("wifi_version", value, 0, 4294967295)
+
+    @property
+    def rtip_version(self):
+        return self._rtip_version
+
+    @rtip_version.setter
+    def rtip_version(self, value):
+        self._rtip_version = validate_integer("rtip_version", value, 0, 4294967295)
+
+    @property
+    def body_version(self):
+        return self._body_version
+
+    @body_version.setter
+    def body_version(self, value):
+        self._body_version = validate_integer("body_version", value, 0, 4294967295)
+
+    @property
+    def to_robot_clad_hash(self):
+        return self._to_robot_clad_hash
+
+    @to_robot_clad_hash.setter
+    def to_robot_clad_hash(self, value):
+        self._to_robot_clad_hash = validate_farray(
+            "to_robot_clad_hash", value, 16, lambda name, value_inner: validate_integer(name, value_inner, 0, 255))
+
+    @property
+    def to_engine_clad_hash(self):
+        return self._to_engine_clad_hash
+
+    @to_engine_clad_hash.setter
+    def to_engine_clad_hash(self, value):
+        self._to_engine_clad_hash = validate_farray(
+            "to_engine_clad_hash", value, 16, lambda name, value_inner: validate_integer(name, value_inner, 0, 255))
+
+    def __len__(self):
+        return \
+            4 + \
+            4 + \
+            4 + \
+            16 + \
+            16
+
+    def __repr__(self):
+        return "{type}(" \
+               "wifi_version={wifi_version}, " \
+               "rtip_version={rtip_version}, " \
+               "body_version={body_version}, " \
+               "to_robot_clad_hash={to_robot_clad_hash}, " \
+               "to_engine_clad_hash={to_engine_clad_hash})".format(
+                type=type(self).__name__,
+                wifi_version=self._wifi_version,
+                rtip_version=self._rtip_version,
+                body_version=self._body_version,
+                to_robot_clad_hash=self._to_robot_clad_hash,
+                to_engine_clad_hash=self._to_engine_clad_hash)
+
+    def to_bytes(self):
+        writer = BinaryWriter()
+        self.to_writer(writer)
+        return writer.dumps()
+
+    def to_writer(self, writer):
+        writer.write(self._wifi_version, "L")
+        writer.write(self._rtip_version, "L")
+        writer.write(self._body_version, "L")
+        writer.write_farray(self._to_robot_clad_hash, "B", 16)
+        writer.write_farray(self._to_engine_clad_hash, "B", 16)
+
+    @classmethod
+    def from_bytes(cls, buffer):
+        reader = BinaryReader(buffer)
+        obj = cls.from_reader(reader)
+        return obj
+
+    @classmethod
+    def from_reader(cls, reader):
+        wifi_version = reader.read("L")
+        rtip_version = reader.read("L")
+        body_version = reader.read("L")
+        to_robot_clad_hash = reader.read_farray("B", 16)
+        to_engine_clad_hash = reader.read_farray("B", 16)
+        return cls(
+            wifi_version=wifi_version,
+            rtip_version=rtip_version,
+            body_version=body_version,
+            to_robot_clad_hash=to_robot_clad_hash,
+            to_engine_clad_hash=to_engine_clad_hash)
+
+
 class ObjectUpAxisChanged(Packet):
 
     __slots__ = (
@@ -7056,6 +7178,7 @@ PACKETS_BY_ID = {
     0xce: ObjectPowerLevel,  # 206
     0xd0: ObjectConnectionState,  # 208
     0xd1: MotorCalibration,  # 209
+    0xd2: FirmwareVersionInfo,  # 210
     0xd7: ObjectUpAxisChanged,  # 215
     0xdb: ButtonPressed,  # 219
     0xdd: FallingStarted,  # 221
@@ -7172,6 +7295,7 @@ PACKETS_BY_GROUP = {
         0xa9,  # ShutdownRobot
         0xae,  # WifiOff
         0xc9,  # HardwareInfo
+        0xd2,  # FirmwareVersionInfo
         0xdb,  # ButtonPressed
         0xed,  # BodyInfo
         0xee,  # FirmwareSignature

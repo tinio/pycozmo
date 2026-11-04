@@ -1689,8 +1689,11 @@ def get_debug_message(name_id: int, format_id: int, args: List[Any]) -> Optional
     """ Generate a log message from robot debug name and format IDs. """
     fmt = ROBOT_FORMAT_IDS.get(format_id)
     if fmt:
-        if fmt[1]:
-            assert fmt[1] == len(args)
+        if fmt[1] and fmt[1] != len(args):
+            # A robot on other firmware - its recovery image, for one - numbers its strings otherwise, so this may
+            # not be the format it meant. Shown unfilled, with the arguments as sent.
+            msg = "{} {}".format(fmt[0], list(args))
+        elif fmt[1]:
             msg = (fmt[0] % _typed_args(fmt[0], args))    # noqa
         else:
             msg = fmt[0]

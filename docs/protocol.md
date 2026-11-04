@@ -165,7 +165,7 @@ ID                 Min     Max      Name
 0xcf	     	     8	     8		                              
 0xd0	     	    13	    13		ObjectConnectionState         
 0xd1	     	     3	     3		                              
-0xd2	     	    44	    44		                              
+0xd2	     	    44	    44		FirmwareVersionInfo           
 0xd7	     	     9	     9		ObjectUpAxisChanged           
 0xec	     	     4	     4		                              
 0xed	     	    12	    12		BodyInfo                      

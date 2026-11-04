@@ -72,6 +72,9 @@ class Client(event.Dispatcher):
 
         self.serial_number_head: Optional[int] = None
         self.robot_fw_sig: Optional[Dict[str, Any]] = None
+        # The firmware versions of the robot's three processors, which a robot on its recovery firmware sends in
+        # place of a firmware signature.
+        self.firmware_version_info: Optional[protocol_encoder.FirmwareVersionInfo] = None
         self.serial_number: Optional[int] = None
         self.body_hw_version: Optional[int] = None
         self.body_color: Optional[protocol_encoder.BodyColor] = None
@@ -141,6 +144,7 @@ class Client(event.Dispatcher):
     def start(self) -> None:
         logger.debug("Starting client...")
         self.add_handler(protocol_encoder.HardwareInfo, self._on_hardware_info)
+        self.add_handler(protocol_encoder.FirmwareVersionInfo, self._on_firmware_version_info)
         self.add_handler(protocol_encoder.FirmwareSignature, self._on_firmware_signature)
         self.add_handler(protocol_encoder.BodyInfo, self._on_body_info)
         self.add_handler(protocol_encoder.ImageChunk, self._on_image_chunk)
@@ -208,6 +212,12 @@ class Client(event.Dispatcher):
         del cli
         self.serial_number_head = pkt.serial_number_head
 
+    def _on_firmware_version_info(self, cli: conn.Connection, pkt: protocol_encoder.FirmwareVersionInfo) -> None:
+        del cli
+        self.firmware_version_info = pkt
+        logger.debug("Firmware versions: Wi-Fi 0x%08x, RTIP 0x%08x, body 0x%08x.",
+                     pkt.wifi_version, pkt.rtip_version, pkt.body_version)
+
     def _on_firmware_signature(self, cli: conn.Connection, pkt: protocol_encoder.FirmwareSignature) -> None:
         del cli
         robot_fw_sig = json.loads(pkt.signature)
@@ -237,6 +247,14 @@ class Client(event.Dispatcher):
             try:
                 self.wait_for(event.EvtRobotFound, timeout=timeout)
             except exception.Timeout as e:
+                info = self.firmware_version_info
+                if info is not None and not self.robot_fw_sig:
+                    # The robot answers but sends no firmware signature, as one on its recovery firmware does. The
+                    # bare "failed to connect" sent people looking for a network fault.
+                    raise exception.ConnectionTimeout(
+                        "Cozmo answered but sent no firmware signature: it is probably running its recovery firmware "
+                        "(Wi-Fi 0x{:08x}, RTIP 0x{:08x}, body 0x{:08x}). Update it with pycozmo_update.py.".format(
+                            info.wifi_version, info.rtip_version, info.body_version)) from e
                 raise exception.ConnectionTimeout("Failed to connect to Cozmo.") from e
 
         if not self.serial_number:
