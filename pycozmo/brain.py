@@ -79,6 +79,9 @@ class Brain:
     FACE_INTERVAL = 0.2
     #: How recently a cube must have been seen for its moving to be something the robot saw.
     CUBE_IN_VIEW_TIME = 2.0
+    #: A behavior a cliff interrupts is not resumed if it met a cliff this recently. With no map of where the edge
+    #: is, resumed, it drove the robot back to it: popping a wheelie on a robot met the same cliff 3 times in 18 s.
+    CLIFF_RESUME_WINDOW = 60.0
 
     #: Need action applied for each orientation the robot can end up in. Only being laid on its
     #: side is worth anything in Anki's table; landing on its back or face is not.
@@ -218,6 +221,8 @@ class Brain:
         self.behavior: Optional[behavior.Behavior] = None
         # Behavior a reaction interrupted, to put back once the reaction is over
         self.behavior_to_resume: Optional[behavior.Behavior] = None
+        # The last behavior a cliff interrupted, and when. See CLIFF_RESUME_WINDOW .
+        self.last_cliff: Optional[Tuple[behavior.Behavior, float]] = None
         # Three threads activate behaviors: the heartbeat looking for something to do, the reaction
         # thread answering a trigger, and the event thread reporting a behavior done.
         self.behavior_lock = RLock()
@@ -445,7 +450,11 @@ class Brain:
             self.post_reaction("CubeMoved")
 
     def on_cube_observed(self, cli: client.Client, cube: cubes.LightCube) -> None:
-        # A cube seen for the first time, or where it was moved to, is acknowledged, as Anki's engine did.
+        # A cube seen for the first time, or where it was moved to, is acknowledged, as Anki's engine did - but not
+        # while the robot handles a cube, plays a game or goes home: on a robot, a cube glanced at on the way back
+        # to the charger cancelled going home. It is acknowledged when next seen after.
+        if isinstance(self.behavior, cube_behaviors.BehaviorScript):
+            return
         if cube.object_type not in self.acknowledged_cubes:
             self.acknowledged_cubes.add(cube.object_type)
             self.post_reaction("ObjectPositionUpdated")
@@ -517,7 +526,23 @@ class Brain:
         # Some triggers have an emotion event of the same name - CliffDetected costs the robot
         # some Happy, Calm and Brave. The behavior a reaction runs may post one of its own.
         self.post_emotion_event(reaction_trigger)
-        self.activate_behavior(reaction.behavior_id, resume_last=reaction.should_resume_last)
+        resume_last = reaction.should_resume_last
+        if resume_last and reaction_trigger == "CliffDetected":
+            resume_last = self.resume_after_cliff(reaction.behavior_id)
+        self.activate_behavior(reaction.behavior_id, resume_last=resume_last)
+
+    def resume_after_cliff(self, reaction_behavior_id: str, now: Optional[float] = None) -> bool:
+        """ Whether to resume the behavior a cliff interrupts: not one that met a cliff within CLIFF_RESUME_WINDOW. """
+        current = self.behavior
+        if current is None or current.get_id() == reaction_behavior_id:
+            # Nothing to resume, or a cliff met while reacting to one, which resumes nothing anyway.
+            return True
+        now = time.perf_counter() if now is None else now
+        last, self.last_cliff = self.last_cliff, (current, now)
+        if last is not None and last[0] is current and now - last[1] < self.CLIFF_RESUME_WINDOW:
+            logger_reaction.info("Not resuming {}: it met a cliff again.".format(current.get_id()))
+            return False
+        return True
 
     def choose_reaction(
             self, reactions: List[behavior.ReactionTrigger]) -> Optional[behavior.ReactionTrigger]:

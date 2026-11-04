@@ -250,6 +250,12 @@ With v2381 and the APK's 255 MB of converted Vorbis in place (tools/pycozmo_conv
     without waiting the full request/watch timeout when no cubes are present.
 
 Bug fixes:
+- A cube seen for the first time on the way back to the charger cancelled going home, on a robot: the reaction that
+    acknowledges it cut the behavior short. A cube first seen while the robot handles a cube, plays a game or goes
+    home is acknowledged when next seen after, as one moved then already was.
+- A behavior a cliff interrupted was resumed however often it met one and, with no map of where the edge is, drove
+    the robot back to it: popping a wheelie on a robot met the same cliff three times in 18 s, before any wheelie.
+    A behavior that meets a cliff again within 60 s is not resumed (Brain.CLIFF_RESUME_WINDOW).
 - A frame holding a command that did not decode was rejected whole, with the packets that did: the command was skipped
     without its place in the sequence, the frame's count came out short, and the peer, never acknowledged, sent it
     again and again. A robot on its recovery firmware sends commands laid out unlike 2381's: 135 of 166 frames from

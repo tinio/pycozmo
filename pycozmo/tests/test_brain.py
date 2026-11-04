@@ -34,6 +34,7 @@ class TestResumeLast(unittest.TestCase):
     def setUp(self):
         self.brain.behavior = None
         self.brain.behavior_to_resume = None
+        self.brain.last_cliff = None
 
     def current(self):
         return self.brain.behavior.get_id() if self.brain.behavior else None
@@ -93,6 +94,47 @@ class TestResumeLast(unittest.TestCase):
         self.brain.activate_behavior("Hiccup")
         self.brain.activate_behavior("NoSuchBehavior")
         self.assertEqual(self.current(), "Hiccup")
+
+    def cliff(self):
+        # Through the reaction thread's own path, the cooldown aside: on a robot the cliffs came 8 to 10 s apart.
+        with mock.patch.object(pycozmo.behavior.ReactionTrigger, "is_on_cooldown", return_value=False):
+            self.brain.process_reaction("CliffDetected")
+
+    def back_from_the_cliff(self):
+        self.brain.deactivate_behavior()
+        self.brain.resume_behavior()
+
+    def test_a_behavior_that_meets_a_cliff_is_resumed(self):
+        self.brain.activate_behavior("Hiccup")
+        self.cliff()
+        self.assertEqual(self.current(), "ReactToCliff")
+        self.back_from_the_cliff()
+        self.assertEqual(self.current(), "Hiccup")
+
+    def test_but_not_one_that_meets_a_cliff_again(self):
+        # Resumed, a behavior that does not know where the edge is drives the robot back to it.
+        self.brain.activate_behavior("Hiccup")
+        self.cliff()
+        self.back_from_the_cliff()
+        self.cliff()
+        self.assertIsNone(self.to_resume())
+        self.back_from_the_cliff()
+        self.assertIsNone(self.current())
+
+    def test_a_cliff_long_after_the_last_resumes_again(self):
+        self.brain.activate_behavior("Hiccup")
+        now = time.perf_counter()
+        self.assertTrue(self.brain.resume_after_cliff("ReactToCliff", now))
+        later = now + self.brain.CLIFF_RESUME_WINDOW + 1.0
+        self.assertTrue(self.brain.resume_after_cliff("ReactToCliff", later))
+
+    def test_a_cliff_met_by_another_behavior_does_not_count(self):
+        self.brain.activate_behavior("Hiccup")
+        self.cliff()
+        self.back_from_the_cliff()
+        self.brain.activate_behavior("ReactToCubeMoved")
+        self.cliff()
+        self.assertEqual(self.to_resume(), "ReactToCubeMoved")
 
 
 @unittest.skipUnless(cozmo_assets_available(), "Cozmo assets not downloaded.")
@@ -403,6 +445,20 @@ class TestCubes(unittest.TestCase):
         self.see(now=time.perf_counter() - self.brain.CUBE_IN_VIEW_TIME - 1.0)
         self.move()
         self.assertEqual(self.reactions(), ["ObjectPositionUpdated"])
+
+    def test_nor_one_first_seen_on_the_way_home(self):
+        # On a robot, a cube glanced at on the way back to the charger cancelled going home.
+        with mock.patch.object(self.brain, "behavior", self.brain.go_home):
+            self.see()
+        self.assertEqual(self.reactions(), [])
+        self.see()
+        self.assertEqual(self.reactions(), ["ObjectPositionUpdated"], "acknowledged when next seen after")
+
+    def test_nor_one_first_seen_while_the_robot_handles_another(self):
+        script = pycozmo.cube_behaviors.BehaviorStackBlocks(self.brain.cli, {"behaviorID": "StackBlocks"})
+        with mock.patch.object(self.brain, "behavior", script):
+            self.see()
+        self.assertEqual(self.reactions(), [])
 
     def test_nor_one_moved_while_the_robot_handles_another(self):
         self.see()
