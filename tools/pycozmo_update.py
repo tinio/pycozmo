@@ -117,31 +117,7 @@ def update(cli: pycozmo.client.Client) -> None:
     print("Finalizing update...")
     pkt = pycozmo.protocol_encoder.FirmwareUpdate(chunk_id=0xFFFF, data=b"\0" * 1024)
     cli.conn.send(pkt)
-    # Factory FW may first ack with status 0 then later 10 after flashing.
-    # Poll for up to 30s for status 10.
-    try:
-        wait_for_result(10.0)
-    except UpdateError:
-        pass
-    if last_status != 10:
-        # Retry waiting: robot may need more time to flash and reboot.
-        for _ in range(6):
-            time.sleep(5)
-            try:
-                wait_for_result(0.2)
-            except UpdateError:
-                pass
-            if last_status == 10:
-                break
-            # Re-send termination if stuck at 0 or 1
-            if last_status in (0, 1):
-                cli.conn.send(pkt)
-                try:
-                    wait_for_result(5.0)
-                    if last_status == 10:
-                        break
-                except UpdateError:
-                    pass
+    wait_for_result(10.0)
     if last_status != 10:
         raise UpdateError("Failed to receive update confirmation (status {}).".format(last_status))
 
