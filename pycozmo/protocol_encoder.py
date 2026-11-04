@@ -3056,7 +3056,7 @@ class EnableStopOnCliff(Packet):
 class SetRobotVolume(Packet):
 
     __slots__ = (
-        "_level",  # uint16
+        "_level",  # uint8
     )
 
     def __init__(self,
@@ -3070,11 +3070,11 @@ class SetRobotVolume(Packet):
 
     @level.setter
     def level(self, value):
-        self._level = validate_integer("level", value, 0, 65535)
+        self._level = validate_integer("level", value, 0, 255)
 
     def __len__(self):
         return \
-            2
+            1
 
     def __repr__(self):
         return "{type}(" \
@@ -3088,7 +3088,7 @@ class SetRobotVolume(Packet):
         return writer.dumps()
 
     def to_writer(self, writer):
-        writer.write(self._level, "H")
+        writer.write(self._level, "B")
 
     @classmethod
     def from_bytes(cls, buffer):
@@ -3098,7 +3098,7 @@ class SetRobotVolume(Packet):
 
     @classmethod
     def from_reader(cls, reader):
-        level = reader.read("H")
+        level = reader.read("B")
         return cls(
             level=level)
 

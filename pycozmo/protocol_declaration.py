@@ -397,7 +397,7 @@ PROTOCOL = Protocol(
             BoolArgument("enable"),
         ]),
         Command(0x64, "SetRobotVolume", group="audio", arguments=[
-            UInt16Argument("level"),
+            UInt8Argument("level"),
         ]),
         Command(0x66, "EnableColorImages", group="camera", arguments=[
             BoolArgument("enable"),

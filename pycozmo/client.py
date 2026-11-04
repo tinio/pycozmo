@@ -843,6 +843,9 @@ class Client(event.Dispatcher):
 
     def set_volume(self, level: int) -> None:
         """ Set audio output volume to a level in the range 0-65535. """
+        # Factory FW expects UInt8 0-255; scale down if needed.
+        if level > 255:
+            level = max(0, min(255, int(level >> 8)))
         pkt = protocol_encoder.SetRobotVolume(level=level)
         self.conn.send(pkt)
 
