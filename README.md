@@ -247,6 +247,7 @@ Cubes, games and faces:
 - [memory_match.py](examples/memory_match.py) - plays Memory Match, another cube game of Anki's app, with Cozmo
 - [keep_away.py](examples/keep_away.py) - plays Keep Away, the third cube game of Anki's app, with Cozmo
 - [faces.py](examples/faces.py) - shows the faces Cozmo sees and who they are, and enrolls a name given
+- [face_recorder.py](examples/face_recorder.py) - continuously records video while turning toward face activity
 
 Other:
 - [rc.py](examples/rc.py) - turns Cozmo into an RC tank that can be driven with an XBox 360 Wireless controller or
