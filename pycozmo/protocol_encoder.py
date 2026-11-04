@@ -2584,7 +2584,6 @@ class ExecutePath(Packet):
 class SetOrigin(Packet):
 
     __slots__ = (
-        "_unknown0",  # uint32
         "_pose_frame_id",  # uint32
         "_pose_origin_id",  # uint32
         "_pose_x",  # float
@@ -2593,27 +2592,17 @@ class SetOrigin(Packet):
     )
 
     def __init__(self,
-                 unknown0=0,
                  pose_frame_id=0,
                  pose_origin_id=1,
                  pose_x=0.0,
                  pose_y=0.0,
                  unknown5=2147483648):
         super().__init__(PacketType.COMMAND, packet_id=0x45)
-        self.unknown0 = unknown0
         self.pose_frame_id = pose_frame_id
         self.pose_origin_id = pose_origin_id
         self.pose_x = pose_x
         self.pose_y = pose_y
         self.unknown5 = unknown5
-
-    @property
-    def unknown0(self):
-        return self._unknown0
-
-    @unknown0.setter
-    def unknown0(self, value):
-        self._unknown0 = validate_integer("unknown0", value, 0, 4294967295)
 
     @property
     def pose_frame_id(self):
@@ -2661,19 +2650,16 @@ class SetOrigin(Packet):
             4 + \
             4 + \
             4 + \
-            4 + \
             4
 
     def __repr__(self):
         return "{type}(" \
-               "unknown0={unknown0}, " \
                "pose_frame_id={pose_frame_id}, " \
                "pose_origin_id={pose_origin_id}, " \
                "pose_x={pose_x}, " \
                "pose_y={pose_y}, " \
                "unknown5={unknown5})".format(
                 type=type(self).__name__,
-                unknown0=self._unknown0,
                 pose_frame_id=self._pose_frame_id,
                 pose_origin_id=self._pose_origin_id,
                 pose_x=self._pose_x,
@@ -2686,7 +2672,6 @@ class SetOrigin(Packet):
         return writer.dumps()
 
     def to_writer(self, writer):
-        writer.write(self._unknown0, "L")
         writer.write(self._pose_frame_id, "L")
         writer.write(self._pose_origin_id, "L")
         writer.write(self._pose_x, "f")
@@ -2701,14 +2686,12 @@ class SetOrigin(Packet):
 
     @classmethod
     def from_reader(cls, reader):
-        unknown0 = reader.read("L")
         pose_frame_id = reader.read("L")
         pose_origin_id = reader.read("L")
         pose_x = reader.read("f")
         pose_y = reader.read("f")
         unknown5 = reader.read("L")
         return cls(
-            unknown0=unknown0,
             pose_frame_id=pose_frame_id,
             pose_origin_id=pose_origin_id,
             pose_x=pose_x,
@@ -2721,14 +2704,17 @@ class SyncTime(Packet):
     __slots__ = (
         "_timestamp",  # uint32
         "_unknown",  # uint32
+        "_unknown2",  # uint32
     )
 
     def __init__(self,
                  timestamp=0,
-                 unknown=0):
+                 unknown=0,
+                 unknown2=0):
         super().__init__(PacketType.COMMAND, packet_id=0x4b)
         self.timestamp = timestamp
         self.unknown = unknown
+        self.unknown2 = unknown2
 
     @property
     def timestamp(self):
@@ -2746,18 +2732,29 @@ class SyncTime(Packet):
     def unknown(self, value):
         self._unknown = validate_integer("unknown", value, 0, 4294967295)
 
+    @property
+    def unknown2(self):
+        return self._unknown2
+
+    @unknown2.setter
+    def unknown2(self, value):
+        self._unknown2 = validate_integer("unknown2", value, 0, 4294967295)
+
     def __len__(self):
         return \
+            4 + \
             4 + \
             4
 
     def __repr__(self):
         return "{type}(" \
                "timestamp={timestamp}, " \
-               "unknown={unknown})".format(
+               "unknown={unknown}, " \
+               "unknown2={unknown2})".format(
                 type=type(self).__name__,
                 timestamp=self._timestamp,
-                unknown=self._unknown)
+                unknown=self._unknown,
+                unknown2=self._unknown2)
 
     def to_bytes(self):
         writer = BinaryWriter()
@@ -2767,6 +2764,7 @@ class SyncTime(Packet):
     def to_writer(self, writer):
         writer.write(self._timestamp, "L")
         writer.write(self._unknown, "L")
+        writer.write(self._unknown2, "L")
 
     @classmethod
     def from_bytes(cls, buffer):
@@ -2778,9 +2776,11 @@ class SyncTime(Packet):
     def from_reader(cls, reader):
         timestamp = reader.read("L")
         unknown = reader.read("L")
+        unknown2 = reader.read("L")
         return cls(
             timestamp=timestamp,
-            unknown=unknown)
+            unknown=unknown,
+            unknown2=unknown2)
 
 
 class EnableCamera(Packet):
@@ -5771,12 +5771,12 @@ class FirmwareSignature(Packet):
 
     __slots__ = (
         "_unknown",  # uint16
-        "_signature",  # str
+        "_signature",  # uint8[uint16]
     )
 
     def __init__(self,
                  unknown=0,
-                 signature=''):
+                 signature=()):
         super().__init__(PacketType.COMMAND, packet_id=0xee)
         # Last 2 bytes of head s/n?
         self.unknown = unknown
@@ -5796,12 +5796,13 @@ class FirmwareSignature(Packet):
 
     @signature.setter
     def signature(self, value):
-        self._signature = validate_string("signature", value, 65535)
+        self._signature = validate_varray(
+            "signature", value, 65535, lambda name, value_inner: validate_integer(name, value_inner, 0, 255))
 
     def __len__(self):
         return \
             2 + \
-            get_string_size(self._signature, 'H')
+            get_varray_size(self._signature, 'H', 'B')
 
     def __repr__(self):
         return "{type}(" \
@@ -5818,7 +5819,7 @@ class FirmwareSignature(Packet):
 
     def to_writer(self, writer):
         writer.write(self._unknown, "H")
-        writer.write_string(self._signature, "H")
+        writer.write_varray(self._signature, "B", "H")
 
     @classmethod
     def from_bytes(cls, buffer):
@@ -5829,7 +5830,15 @@ class FirmwareSignature(Packet):
     @classmethod
     def from_reader(cls, reader):
         unknown = reader.read("H")
-        signature = reader.read_string("H")
+        start = reader.tell()
+        try:
+            signature = reader.read_varray("B", "H")
+            if isinstance(signature, (bytes, bytearray)) and len(signature) > 500:
+                raise ValueError("implausible varray length")
+        except Exception:
+            reader.seek_set(start)
+            remaining = len(reader.buffer) - reader.tell()
+            signature = reader._read_bytes(remaining) if remaining > 0 else b""
         return cls(
             unknown=unknown,
             signature=signature)
@@ -5934,18 +5943,23 @@ class RobotState(Packet):
         "_lwheel_speed_mmps",  # float
         "_rwheel_speed_mmps",  # float
         "_head_angle_rad",  # float
-        "_lift_angle_rad",  # float
+        "_lift_height_mm",  # float
         "_accel_x",  # float
         "_accel_y",  # float
-        "_accel_z",  # float
-        "_gyro_x",  # float
-        "_gyro_y",  # float
-        "_gyro_z",  # float
-        "_battery_voltage",  # float
-        "_status",  # uint32
-        "_cliff_data_raw",  # uint16[4]
-        "_backpack_touch_sensor_raw",  # uint16
-        "_curr_path_segment",  # uint8
+        "_battery_voltage_mv",  # uint16
+        "_unknown_batt_pad",  # uint16
+        "_cliff_data_raw_0",  # uint16
+        "_cliff_data_raw_1",  # uint16
+        "_backpack_touch_sensor_raw",  # uint8
+        "_lift_angle_rad",  # compat
+        "_accel_z",  # compat
+        "_gyro_x",  # compat
+        "_gyro_y",  # compat
+        "_gyro_z",  # compat
+        "_battery_voltage",  # compat
+        "_status",  # compat
+        "_cliff_data_raw",  # compat
+        "_curr_path_segment",  # compat
     )
 
     def __init__(self,
@@ -5960,19 +5974,43 @@ class RobotState(Packet):
                  lwheel_speed_mmps=0.0,
                  rwheel_speed_mmps=0.0,
                  head_angle_rad=0.0,
-                 lift_angle_rad=0.0,
+                 lift_height_mm=0.0,
+                 lift_angle_rad=None,
                  accel_x=0.0,
                  accel_y=0.0,
                  accel_z=0.0,
                  gyro_x=0.0,
                  gyro_y=0.0,
                  gyro_z=0.0,
-                 battery_voltage=0.0,
+                 battery_voltage=None,
+                 battery_voltage_mv=None,
                  status=0,
-                 cliff_data_raw=(),
+                 cliff_data_raw=None,
+                 cliff_data_raw_0=None,
+                 cliff_data_raw_1=None,
                  backpack_touch_sensor_raw=0,
-                 curr_path_segment=0):
+                 unknown_batt_pad=0,
+                 curr_path_segment=0,
+                 **kwargs):
         super().__init__(PacketType.EVENT, packet_id=0xf0)
+        if cliff_data_raw is not None:
+            if isinstance(cliff_data_raw, (list, tuple)) and len(cliff_data_raw) >= 2:
+                cliff_data_raw_0 = cliff_data_raw[0]
+                cliff_data_raw_1 = cliff_data_raw[1]
+        if cliff_data_raw_0 is None:
+            cliff_data_raw_0 = 0
+        if cliff_data_raw_1 is None:
+            cliff_data_raw_1 = 0
+        if lift_angle_rad is not None:
+            try:
+                lift_height_mm = float(lift_angle_rad) * 100
+            except: pass
+        if battery_voltage is not None and battery_voltage_mv is None:
+            try:
+                battery_voltage_mv = int(float(battery_voltage) * 1000)
+            except: battery_voltage_mv = 0
+        if battery_voltage_mv is None:
+            battery_voltage_mv = 0
         self.timestamp = timestamp
         self.pose_frame_id = pose_frame_id
         self.pose_origin_id = pose_origin_id
@@ -5984,18 +6022,23 @@ class RobotState(Packet):
         self.lwheel_speed_mmps = lwheel_speed_mmps
         self.rwheel_speed_mmps = rwheel_speed_mmps
         self.head_angle_rad = head_angle_rad
-        self.lift_angle_rad = lift_angle_rad
+        self.lift_height_mm = lift_height_mm
+        self._lift_angle_rad = lift_angle_rad
         self.accel_x = accel_x
         self.accel_y = accel_y
-        self.accel_z = accel_z
-        self.gyro_x = gyro_x
-        self.gyro_y = gyro_y
-        self.gyro_z = gyro_z
-        self.battery_voltage = battery_voltage
-        self.status = status
-        self.cliff_data_raw = cliff_data_raw
+        self._accel_z = accel_z
+        self._gyro_x = gyro_x
+        self._gyro_y = gyro_y
+        self._gyro_z = gyro_z
+        self.battery_voltage_mv = battery_voltage_mv
+        self.unknown_batt_pad = unknown_batt_pad
+        self.cliff_data_raw_0 = cliff_data_raw_0
+        self.cliff_data_raw_1 = cliff_data_raw_1
         self.backpack_touch_sensor_raw = backpack_touch_sensor_raw
-        self.curr_path_segment = curr_path_segment
+        self._status = status
+        self._curr_path_segment = curr_path_segment
+        self._battery_voltage = battery_voltage
+        self._cliff_data_raw = cliff_data_raw
 
     @property
     def timestamp(self):
@@ -6086,12 +6129,24 @@ class RobotState(Packet):
         self._head_angle_rad = validate_float("head_angle_rad", value)
 
     @property
-    def lift_angle_rad(self):
-        return self._lift_angle_rad
+    def lift_height_mm(self):
+        return self._lift_height_mm
 
+    @lift_height_mm.setter
+    def lift_height_mm(self, value):
+        self._lift_height_mm = validate_float("lift_height_mm", value)
+
+    @property
+    def lift_angle_rad(self):
+        if getattr(self, "_lift_angle_rad", None) is not None:
+            return self._lift_angle_rad
+        return 0.0
     @lift_angle_rad.setter
     def lift_angle_rad(self, value):
         self._lift_angle_rad = validate_float("lift_angle_rad", value)
+        try:
+            self._lift_height_mm = float(value) * 100
+        except: pass
 
     @property
     def accel_x(self):
@@ -6111,60 +6166,93 @@ class RobotState(Packet):
 
     @property
     def accel_z(self):
-        return self._accel_z
-
+        return getattr(self, "_accel_z", 0.0)
     @accel_z.setter
     def accel_z(self, value):
         self._accel_z = validate_float("accel_z", value)
-
     @property
     def gyro_x(self):
-        return self._gyro_x
-
+        return getattr(self, "_gyro_x", 0.0)
     @gyro_x.setter
     def gyro_x(self, value):
         self._gyro_x = validate_float("gyro_x", value)
-
     @property
     def gyro_y(self):
-        return self._gyro_y
-
+        return getattr(self, "_gyro_y", 0.0)
     @gyro_y.setter
     def gyro_y(self, value):
         self._gyro_y = validate_float("gyro_y", value)
-
     @property
     def gyro_z(self):
-        return self._gyro_z
-
+        return getattr(self, "_gyro_z", 0.0)
     @gyro_z.setter
     def gyro_z(self, value):
         self._gyro_z = validate_float("gyro_z", value)
-
     @property
     def battery_voltage(self):
-        return self._battery_voltage
-
+        if getattr(self, "_battery_voltage", None) is not None:
+            return self._battery_voltage
+        return getattr(self, "_battery_voltage_mv", 0) / 1000.0
     @battery_voltage.setter
     def battery_voltage(self, value):
         self._battery_voltage = validate_float("battery_voltage", value)
-
+        self._battery_voltage_mv = int(float(value)*1000)
     @property
     def status(self):
-        return self._status
-
+        return getattr(self, "_status", 0)
     @status.setter
     def status(self, value):
         self._status = validate_integer("status", value, 0, 4294967295)
-
     @property
     def cliff_data_raw(self):
-        return self._cliff_data_raw
-
+        v = getattr(self, "_cliff_data_raw", None)
+        if v is not None:
+            return v
+        return (getattr(self, "_cliff_data_raw_0", 0), getattr(self, "_cliff_data_raw_1", 0), 0, 0)
     @cliff_data_raw.setter
     def cliff_data_raw(self, value):
-        self._cliff_data_raw = validate_farray(
-            "cliff_data_raw", value, 4, lambda name, value_inner: validate_integer(name, value_inner, 0, 65535))
+        self._cliff_data_raw = tuple(value)
+        if len(value) >= 2:
+            self._cliff_data_raw_0 = int(value[0])
+            self._cliff_data_raw_1 = int(value[1])
+    @property
+    def curr_path_segment(self):
+        return getattr(self, "_curr_path_segment", 0)
+    @curr_path_segment.setter
+    def curr_path_segment(self, value):
+        self._curr_path_segment = validate_integer("curr_path_segment", value, 0, 255)
+
+    @property
+    def battery_voltage_mv(self):
+        return self._battery_voltage_mv
+
+    @battery_voltage_mv.setter
+    def battery_voltage_mv(self, value):
+        self._battery_voltage_mv = validate_integer("battery_voltage_mv", value, 0, 65535)
+
+    @property
+    def unknown_batt_pad(self):
+        return self._unknown_batt_pad
+
+    @unknown_batt_pad.setter
+    def unknown_batt_pad(self, value):
+        self._unknown_batt_pad = validate_integer("unknown_batt_pad", value, 0, 65535)
+
+    @property
+    def cliff_data_raw_0(self):
+        return self._cliff_data_raw_0
+
+    @cliff_data_raw_0.setter
+    def cliff_data_raw_0(self, value):
+        self._cliff_data_raw_0 = validate_integer("cliff_data_raw_0", value, 0, 65535)
+
+    @property
+    def cliff_data_raw_1(self):
+        return self._cliff_data_raw_1
+
+    @cliff_data_raw_1.setter
+    def cliff_data_raw_1(self, value):
+        self._cliff_data_raw_1 = validate_integer("cliff_data_raw_1", value, 0, 65535)
 
     @property
     def backpack_touch_sensor_raw(self):
@@ -6172,15 +6260,7 @@ class RobotState(Packet):
 
     @backpack_touch_sensor_raw.setter
     def backpack_touch_sensor_raw(self, value):
-        self._backpack_touch_sensor_raw = validate_integer("backpack_touch_sensor_raw", value, 0, 65535)
-
-    @property
-    def curr_path_segment(self):
-        return self._curr_path_segment
-
-    @curr_path_segment.setter
-    def curr_path_segment(self, value):
-        self._curr_path_segment = validate_integer("curr_path_segment", value, 0, 255)
+        self._backpack_touch_sensor_raw = validate_integer("backpack_touch_sensor_raw", value, 0, 255)
 
     def __len__(self):
         return \
@@ -6198,13 +6278,9 @@ class RobotState(Packet):
             4 + \
             4 + \
             4 + \
-            4 + \
-            4 + \
-            4 + \
-            4 + \
-            4 + \
-            4 + \
-            8 + \
+            2 + \
+            2 + \
+            2 + \
             2 + \
             1
 
@@ -6221,18 +6297,14 @@ class RobotState(Packet):
                "lwheel_speed_mmps={lwheel_speed_mmps}, " \
                "rwheel_speed_mmps={rwheel_speed_mmps}, " \
                "head_angle_rad={head_angle_rad}, " \
-               "lift_angle_rad={lift_angle_rad}, " \
+               "lift_height_mm={lift_height_mm}, " \
                "accel_x={accel_x}, " \
                "accel_y={accel_y}, " \
-               "accel_z={accel_z}, " \
-               "gyro_x={gyro_x}, " \
-               "gyro_y={gyro_y}, " \
-               "gyro_z={gyro_z}, " \
-               "battery_voltage={battery_voltage}, " \
-               "status={status}, " \
-               "cliff_data_raw={cliff_data_raw}, " \
-               "backpack_touch_sensor_raw={backpack_touch_sensor_raw}, " \
-               "curr_path_segment={curr_path_segment})".format(
+               "battery_voltage_mv={battery_voltage_mv}, " \
+               "unknown_batt_pad={unknown_batt_pad}, " \
+               "cliff_data_raw_0={cliff_data_raw_0}, " \
+               "cliff_data_raw_1={cliff_data_raw_1}, " \
+               "backpack_touch_sensor_raw={backpack_touch_sensor_raw})".format(
                 type=type(self).__name__,
                 timestamp=self._timestamp,
                 pose_frame_id=self._pose_frame_id,
@@ -6245,18 +6317,14 @@ class RobotState(Packet):
                 lwheel_speed_mmps=self._lwheel_speed_mmps,
                 rwheel_speed_mmps=self._rwheel_speed_mmps,
                 head_angle_rad=self._head_angle_rad,
-                lift_angle_rad=self._lift_angle_rad,
+                lift_height_mm=self._lift_height_mm,
                 accel_x=self._accel_x,
                 accel_y=self._accel_y,
-                accel_z=self._accel_z,
-                gyro_x=self._gyro_x,
-                gyro_y=self._gyro_y,
-                gyro_z=self._gyro_z,
-                battery_voltage=self._battery_voltage,
-                status=self._status,
-                cliff_data_raw=self._cliff_data_raw,
-                backpack_touch_sensor_raw=self._backpack_touch_sensor_raw,
-                curr_path_segment=self._curr_path_segment)
+                battery_voltage_mv=self._battery_voltage_mv,
+                unknown_batt_pad=self._unknown_batt_pad,
+                cliff_data_raw_0=self._cliff_data_raw_0,
+                cliff_data_raw_1=self._cliff_data_raw_1,
+                backpack_touch_sensor_raw=self._backpack_touch_sensor_raw)
 
     def to_bytes(self):
         writer = BinaryWriter()
@@ -6275,18 +6343,14 @@ class RobotState(Packet):
         writer.write(self._lwheel_speed_mmps, "f")
         writer.write(self._rwheel_speed_mmps, "f")
         writer.write(self._head_angle_rad, "f")
-        writer.write(self._lift_angle_rad, "f")
+        writer.write(self._lift_height_mm, "f")
         writer.write(self._accel_x, "f")
         writer.write(self._accel_y, "f")
-        writer.write(self._accel_z, "f")
-        writer.write(self._gyro_x, "f")
-        writer.write(self._gyro_y, "f")
-        writer.write(self._gyro_z, "f")
-        writer.write(self._battery_voltage, "f")
-        writer.write(self._status, "L")
-        writer.write_farray(self._cliff_data_raw, "H", 4)
-        writer.write(self._backpack_touch_sensor_raw, "H")
-        writer.write(self._curr_path_segment, "B")
+        writer.write(self._battery_voltage_mv, "H")
+        writer.write(self._unknown_batt_pad, "H")
+        writer.write(self._cliff_data_raw_0, "H")
+        writer.write(self._cliff_data_raw_1, "H")
+        writer.write(self._backpack_touch_sensor_raw, "B")
 
     @classmethod
     def from_bytes(cls, buffer):
@@ -6307,18 +6371,14 @@ class RobotState(Packet):
         lwheel_speed_mmps = reader.read("f")
         rwheel_speed_mmps = reader.read("f")
         head_angle_rad = reader.read("f")
-        lift_angle_rad = reader.read("f")
+        lift_height_mm = reader.read("f")
         accel_x = reader.read("f")
         accel_y = reader.read("f")
-        accel_z = reader.read("f")
-        gyro_x = reader.read("f")
-        gyro_y = reader.read("f")
-        gyro_z = reader.read("f")
-        battery_voltage = reader.read("f")
-        status = reader.read("L")
-        cliff_data_raw = reader.read_farray("H", 4)
-        backpack_touch_sensor_raw = reader.read("H")
-        curr_path_segment = reader.read("B")
+        battery_voltage_mv = reader.read("H")
+        unknown_batt_pad = reader.read("H")
+        cliff_data_raw_0 = reader.read("H")
+        cliff_data_raw_1 = reader.read("H")
+        backpack_touch_sensor_raw = reader.read("B")
         return cls(
             timestamp=timestamp,
             pose_frame_id=pose_frame_id,
@@ -6331,18 +6391,14 @@ class RobotState(Packet):
             lwheel_speed_mmps=lwheel_speed_mmps,
             rwheel_speed_mmps=rwheel_speed_mmps,
             head_angle_rad=head_angle_rad,
-            lift_angle_rad=lift_angle_rad,
+            lift_height_mm=lift_height_mm,
             accel_x=accel_x,
             accel_y=accel_y,
-            accel_z=accel_z,
-            gyro_x=gyro_x,
-            gyro_y=gyro_y,
-            gyro_z=gyro_z,
-            battery_voltage=battery_voltage,
-            status=status,
-            cliff_data_raw=cliff_data_raw,
-            backpack_touch_sensor_raw=backpack_touch_sensor_raw,
-            curr_path_segment=curr_path_segment)
+            battery_voltage_mv=battery_voltage_mv,
+            unknown_batt_pad=unknown_batt_pad,
+            cliff_data_raw_0=cliff_data_raw_0,
+            cliff_data_raw_1=cliff_data_raw_1,
+            backpack_touch_sensor_raw=backpack_touch_sensor_raw)
 
 
 class AnimationState(Packet):

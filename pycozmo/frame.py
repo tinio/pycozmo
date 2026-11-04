@@ -144,7 +144,10 @@ class Frame(object):
                 except (ValueError, IndexError) as e:
                     logger_protocol.debug("Failed to decode packet. Ignoring. {}".format(e))
                     reader.seek_set(expected_offset)
-            assert seq == OOB_SEQ or seq + 1 == pkt_seq or pkt.type == PacketType.PING
+            if not (seq == OOB_SEQ or seq + 1 == pkt_seq or (pkts and pkts[-1].type == PacketType.PING)):
+                logger_protocol.debug(
+                    f"Frame seq mismatch: first_seq={first_seq} seq={seq} pkt_seq={pkt_seq} type={frame_type} pkts={len(pkts)}")
+                # Relaxed: robot sometimes sends OOB-only frames with non-OOB seq (e.g. after Enable)
         elif frame_type == FrameType.PING:
             pkt = Ping.from_reader(reader)
             pkts.append(pkt)

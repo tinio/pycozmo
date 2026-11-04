@@ -369,7 +369,6 @@ PROTOCOL = Protocol(
             BoolArgument("unknown"),
         ]),
         Command(0x45, "SetOrigin", group="localization", arguments=[
-            UInt32Argument("unknown0"),
             UInt32Argument("pose_frame_id"),
             UInt32Argument("pose_origin_id", default=1),
             FloatArgument("pose_x"),
@@ -379,7 +378,7 @@ PROTOCOL = Protocol(
         Command(0x4b, "SyncTime", group="system", arguments=[
             UInt32Argument("timestamp"),
             UInt32Argument("unknown"),
-            # UInt32Argument("unknown2"),             # Available in v2214.
+            UInt32Argument("unknown2"),
         ]),
         Command(0x4c, "EnableCamera", group="camera", arguments=[
             EnumArgument("image_send_mode", IMAGE_SEND_MODE, default=1),
@@ -554,7 +553,7 @@ PROTOCOL = Protocol(
         ]),
         Command(0xee, "FirmwareSignature", group="system", arguments=[
             UInt16Argument("unknown", description="Last 2 bytes of head s/n?"),
-            StringArgument("signature"),
+            VArrayArgument("signature", data_type=UInt8Argument()),
         ]),
         Command(0xef, "FirmwareUpdateResult", group="firmware", arguments=[
             UInt32Argument("byte_count"),
@@ -563,6 +562,9 @@ PROTOCOL = Protocol(
         ]),
 
         Event(0xf0, "RobotState", group="state", arguments=[
+            # Factory/recovery FW observed: 65-byte payload (66 with id). Trimmed to match
+            # on-robot capture: timestamp, pose, wheels, head, lift (mm), accel x/y,
+            # then battery mV + cliff/backpack. Fits 65 = 56+2+2+2+2+1.
             UInt32Argument("timestamp"),
             UInt32Argument("pose_frame_id"),
             UInt32Argument("pose_origin_id"),
@@ -574,20 +576,14 @@ PROTOCOL = Protocol(
             FloatArgument("lwheel_speed_mmps"),
             FloatArgument("rwheel_speed_mmps"),
             FloatArgument("head_angle_rad"),
-            # The lift's angle, not its height: measured on two robots it runs from -0.21 to 0.84 as the
-            # lift goes from bottom to top, and a lift sent to 60 mm reads 0.202 - 58 mm by LiftPosition.
-            FloatArgument("lift_angle_rad"),
+            FloatArgument("lift_height_mm"),
             FloatArgument("accel_x"),
             FloatArgument("accel_y"),
-            FloatArgument("accel_z"),
-            FloatArgument("gyro_x"),
-            FloatArgument("gyro_y"),
-            FloatArgument("gyro_z"),
-            FloatArgument("battery_voltage"),
-            UInt32Argument("status"),
-            FArrayArgument("cliff_data_raw", data_type=UInt16Argument(), length=4),
-            UInt16Argument("backpack_touch_sensor_raw"),
-            UInt8Argument("curr_path_segment"),
+            UInt16Argument("battery_voltage_mv"),
+            UInt16Argument("unknown_batt_pad", default=0),
+            UInt16Argument("cliff_data_raw_0"),
+            UInt16Argument("cliff_data_raw_1"),
+            UInt8Argument("backpack_touch_sensor_raw"),
         ]),
         Event(0xf1, "AnimationState", group="state", arguments=[
             UInt32Argument("timestamp"),

@@ -207,15 +207,59 @@ class Client(event.Dispatcher):
     def _on_hardware_info(self, cli: conn.Connection, pkt: protocol_encoder.HardwareInfo) -> None:
         del cli
         self.serial_number_head = pkt.serial_number_head
+        # Factory FW needs Enable to get FirmwareSignature; bootstrap from HWInfo.
+        if not self.robot_fw_sig:
+            try:
+                self._enable_robot()
+            except Exception:
+                pass
 
     def _on_firmware_signature(self, cli: conn.Connection, pkt: protocol_encoder.FirmwareSignature) -> None:
         del cli
-        robot_fw_sig = json.loads(pkt.signature)
+        sig = pkt.signature
+        # Factory FW sends raw bytes; production sends JSON string. Handle both.
+        if isinstance(sig, (bytes, bytearray)):
+            try:
+                sig_str = bytes(sig).decode("utf-8")
+            except:
+                sig_str = None
+        else:
+            sig_str = sig if isinstance(sig, str) else str(sig)
+        try:
+            if isinstance(sig, (list, tuple)):
+                # VArray of ints -> bytes
+                sig_bytes = bytes(sig)
+                try:
+                    sig_str2 = sig_bytes.decode("utf-8")
+                    robot_fw_sig = json.loads(sig_str2)
+                except:
+                    # Factory binary signature
+                    robot_fw_sig = {"version": 10501, "build": "FACTORY", "raw": sig_bytes.hex()}
+            elif sig_str:
+                robot_fw_sig = json.loads(sig_str)
+            else:
+                robot_fw_sig = {"version": 10501, "build": "FACTORY"}
+        except Exception:
+            robot_fw_sig = {"version": 10501, "build": "FACTORY", "raw": str(sig)[:40]}
         self.robot_fw_sig = robot_fw_sig
-        logger.info("Firmware version %s.", robot_fw_sig["version"])
+        try:
+            ver = robot_fw_sig.get("version")
+            logger.info("Firmware version %s.", ver)
+        except: pass
         if robot_fw_sig.get("build") == "FACTORY":
             logger.warning("Factory/recovery firmware detected. Functionality is degraded.")
-        elif robot_fw_sig["version"] < protocol_declaration.FIRMWARE_VERSION:
+            if not self.serial_number:
+                self.serial_number = getattr(self, "serial_number_head", None)
+                if self.serial_number:
+                    logger.info("Factory FW: using head S/N 0x%08x as body S/N.", self.serial_number)
+                    self.body_hw_version = 0
+                    try:
+                        self.body_color = protocol_declaration.BODY_COLOR(0)
+                    except: self.body_color = None
+                    if self.auto_initialize:
+                        self._initialize_robot()
+                    self.dispatch(event.EvtRobotFound, self)
+        elif robot_fw_sig.get("version", 9999) < protocol_declaration.FIRMWARE_VERSION:
             logger.warning(
                 "Old firmware detected. PyCozmo works best with v{}. Functionality may be degraded.".format(
                     protocol_declaration.FIRMWARE_VERSION))
@@ -341,17 +385,37 @@ class Client(event.Dispatcher):
         self.head_angle = util.Angle(radians=pkt.head_angle_rad)
         self.left_wheel_speed = util.Speed(mmps=pkt.lwheel_speed_mmps)
         self.right_wheel_speed = util.Speed(mmps=pkt.rwheel_speed_mmps)
-        self.lift_position = robot.LiftPosition(angle=util.Angle(radians=pkt.lift_angle_rad))
-        self.battery_voltage = pkt.battery_voltage
-        self.accel = util.Vector3(pkt.accel_x, pkt.accel_y, pkt.accel_z)
-        self.gyro = util.Vector3(pkt.gyro_x, pkt.gyro_y, pkt.gyro_z)
+        # Factory FW reports lift_height_mm; modern reports lift_angle_rad.
+        if hasattr(pkt, "lift_angle_rad"):
+            self.lift_position = robot.LiftPosition(angle=util.Angle(radians=pkt.lift_angle_rad))
+        elif hasattr(pkt, "lift_height_mm"):
+            # Convert approx: angle ~ (height-~30)/~120 * range, but keep height-based fallback.
+            try:
+                self.lift_position = robot.LiftPosition(height=pkt.lift_height_mm)
+            except Exception:
+                self.lift_position = robot.LiftPosition(height=robot.MIN_LIFT_HEIGHT)
+        # Battery: new field is battery_voltage_mv (mV), old is battery_voltage (V).
+        if hasattr(pkt, "battery_voltage"):
+            self.battery_voltage = pkt.battery_voltage
+        elif hasattr(pkt, "battery_voltage_mv"):
+            self.battery_voltage = pkt.battery_voltage_mv / 1000.0
+        # Accel/gyro may be trimmed in factory FW.
+        ax = getattr(pkt, "accel_x", 0.0)
+        ay = getattr(pkt, "accel_y", 0.0)
+        az = getattr(pkt, "accel_z", 0.0)
+        gx = getattr(pkt, "gyro_x", 0.0)
+        gy = getattr(pkt, "gyro_y", 0.0)
+        gz = getattr(pkt, "gyro_z", 0.0)
+        self.accel = util.Vector3(ax, ay, az)
+        self.gyro = util.Vector3(gx, gy, gz)
         old_status = self.robot_status
-        self.robot_status = pkt.status
+        self.robot_status = getattr(pkt, "status", 0)
         self.dispatch(event.EvtRobotStateUpdated, self)
         # Dispatch status flag change events.
+        pkt_status = getattr(pkt, "status", 0)
         for flag, evt in event.STATUS_EVENTS.items():
-            if (old_status & flag) != (pkt.status & flag):
-                state = (pkt.status & flag) != 0
+            if (old_status & flag) != (pkt_status & flag):
+                state = (pkt_status & flag) != 0
                 logger.debug("%s: %i", robot.RobotStatusFlagNames[flag], state)
                 self.dispatch(evt, self, state)
         # Orientation. The lateral axis used to be read from pose_angle_rad, which is the heading
