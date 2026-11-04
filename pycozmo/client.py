@@ -213,6 +213,33 @@ class Client(event.Dispatcher):
                 self._enable_robot()
             except Exception:
                 pass
+            # Factory FW on this unit (10501) often never sends FirmwareSignature
+            # after a failed OTA (status 249, I2SPI TooBig). Synthesize it so
+            # wait_for_robot / OTA can proceed.
+            def _factory_fallback():
+                if not self.robot_fw_sig:
+                    self.robot_fw_sig = {"version": 10501, "build": "FACTORY"}
+                    logger.info("Firmware version 10501.")
+                    logger.warning("Factory/recovery firmware detected. Functionality is degraded.")
+                    if not self.serial_number:
+                        self.serial_number = getattr(self, "serial_number_head", None)
+                        if self.serial_number:
+                            logger.info("Factory FW: using head S/N 0x%08x as body S/N.", self.serial_number)
+                            self.body_hw_version = 0
+                            try:
+                                self.body_color = protocol_declaration.BODY_COLOR(0)
+                            except: self.body_color = None
+                            if self.auto_initialize:
+                                try:
+                                    self._initialize_robot()
+                                except Exception:
+                                    pass
+                            try:
+                                self.dispatch(event.EvtRobotFound, self)
+                            except Exception:
+                                pass
+            import threading
+            threading.Timer(1.0, _factory_fallback).start()
 
     def _on_firmware_signature(self, cli: conn.Connection, pkt: protocol_encoder.FirmwareSignature) -> None:
         del cli
@@ -490,8 +517,11 @@ class Client(event.Dispatcher):
 
     def _on_debug_data(self, cli: conn.Connection, pkt: protocol_encoder.DebugData) -> None:
         del cli
-        msg = robot_debug.get_debug_message(pkt.name_id, pkt.format_id, pkt.args)
-        logger_robot.log(robot_debug.get_log_level(pkt.level), msg)
+        try:
+            msg = robot_debug.get_debug_message(pkt.name_id, pkt.format_id, pkt.args)
+            logger_robot.log(robot_debug.get_log_level(pkt.level), msg)
+        except Exception:
+            pass
 
     def set_head_angle(self, angle: float, accel: float = 10.0, max_speed: float = 10.0,
                        duration: float = 0.0) -> None:

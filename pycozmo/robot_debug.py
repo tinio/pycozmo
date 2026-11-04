@@ -1690,8 +1690,15 @@ def get_debug_message(name_id: int, format_id: int, args: List[Any]) -> Optional
     fmt = ROBOT_FORMAT_IDS.get(format_id)
     if fmt:
         if fmt[1]:
-            assert fmt[1] == len(args)
-            msg = (fmt[0] % _typed_args(fmt[0], args))    # noqa
+            if fmt[1] != len(args):
+                # Factory/recovery FW sometimes sends mismatched arg counts.
+                try:
+                    padded = list(args) + [0] * (fmt[1] - len(args))
+                    msg = (fmt[0] % _typed_args(fmt[0], padded[:fmt[1]]))
+                except Exception:
+                    msg = fmt[0]
+            else:
+                msg = (fmt[0] % _typed_args(fmt[0], args))    # noqa
         else:
             msg = fmt[0]
     else:
