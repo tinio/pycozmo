@@ -109,7 +109,8 @@ class Brain:
         self.vision_config: Dict[str, Any] = {}
         for cfg_name in ("features.json",):
             try:
-                import json, os as _os
+                import json
+                import os as _os
                 _feat_path = _os.path.join(str(util.get_cozmo_asset_dir()),
                                            "cozmo_resources", "config", cfg_name)
                 with open(_feat_path, "r") as _f:
@@ -261,7 +262,8 @@ class Brain:
             if self.cli.robot_status & robot.RobotStatusFlag.IS_ON_CHARGER:
                 logger_behavior.info("On charger at startup: driving off.")
                 # Directly schedule the behavior; heartbeat will also pick it.
-                self.post_reaction("DriveOffCharger") if "DriveOffCharger" in self.reaction_trigger_behavior_map else None
+                if "DriveOffCharger" in self.reaction_trigger_behavior_map:
+                    self.post_reaction("DriveOffCharger")
         except Exception:
             pass
 
@@ -422,7 +424,7 @@ class Brain:
         # Image quality: brightness sanity check; if too dark/bright, emit warning.
         if modes.get("CheckingQuality", True):
             try:
-                import numpy as np  # type: ignore
+                import numpy as np
                 arr = np.asarray(new_im.convert("L"))
                 mean = float(arr.mean())
                 if mean < 20 or mean > 235:

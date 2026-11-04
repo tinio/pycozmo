@@ -413,7 +413,7 @@ class BehaviorReactToFrustration(BehaviorPlayAnim):
         if self.deactivated:
             return
         self.cli.drive_wheels(40.0, 40.0)
-        self._frustration_timer = threading.Timer(abs(distance) / 40.0, self._frustration_done)  # type: ignore[attr-defined]
+        self._frustration_timer = threading.Timer(abs(distance) / 40.0, self._frustration_done)
         self._frustration_timer.daemon = True
         self._frustration_timer.start()
 
@@ -477,7 +477,7 @@ class BehaviorFistBump(BehaviorPlayAnim):
     def wants_to_run(self) -> bool:
         if self.abort_if_no_face:
             try:
-                visible = self.cli.faces.visible()  # type: ignore[union-attr]
+                visible = self.cli.faces.visible()
                 if not visible:
                     return False
             except Exception:
@@ -493,12 +493,12 @@ class BehaviorFistBump(BehaviorPlayAnim):
     def activate(self) -> None:
         self.bumped = False
         try:
-            self.add_handler(event.EvtRobotStateUpdated, self._on_robot_state)  # type: ignore[attr-defined]
+            self.add_handler(event.EvtRobotStateUpdated, self._on_robot_state)
         except Exception:
             pass
         super().activate()
 
-    def _on_robot_state(self, cli: client.Client) -> None:  # type: ignore[override]
+    def _on_robot_state(self, cli: client.Client) -> None:
         if self.bumped or self.deactivated:
             return
         accel = getattr(cli, "accelerometer", None) or getattr(cli, "accel", None)
